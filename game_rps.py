@@ -179,13 +179,13 @@ class RPSRandomPolicy(Policy):
         return a
 
 if __name__ == '__main__':
-    print('A')
     game = Game(RPSRandomPolicy(limit=3), RPSRandomPolicy(limit=3))
     simulator = RPSSimulator()
     game.reset()
-    print('B')
     trace = game.start(simulator)
-    print('C')
-    # trace.show()
+    trace.show()
+    feas = [s.feature_func() for s in trace.states]
     loose_trace = LoosedTrace(trace, simulator)
     loose_trace.show()
+    splitted = loose_trace.split(view=0)
+    X, y = IRL(simulator, RPSAction(0)).feed([trace])

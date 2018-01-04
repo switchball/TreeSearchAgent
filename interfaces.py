@@ -10,7 +10,7 @@ from sklearn.cross_validation import train_test_split
 import numpy as np
 import random
 from functools import reduce
-from typing import List, Optional
+from typing import List, Tuple, Optional
 
 
 class State(object):
@@ -191,7 +191,6 @@ class IRL(object):
         self.y = rs
         return self.X, self.y
 
-
     def train_w(self, hyper_param_c=1.0):
         # TODO IRL Algorithm needed
 
@@ -203,51 +202,41 @@ class IRL(object):
         self.coef = model.coef_
         return model.coef_
 
-    def _split_advantage(self, trace_):
+    def _split_advantage(self, trace) -> List[np.ndarray]:
         ret = []
-        winner = 1 if trace_.final_state().reward() >= 0 else 2
-        split_arr = trace_.split_old()
-        for trace in split_arr:
-            s0 = trace.states[0]
-            discounted_r = [pow(self.gamma, k) * s.feature_func(view=winner)
-                             * ((1.0/(1-self.gamma) if k == len(trace.states) - 1 else 1))
-                             for k, s in enumerate(trace.states)]
-            mu_star = sum(discounted_r)
-            #route_states = self.bs.next_action_n(s0, trace.actions[0], 100)
-            zero_act = (self.zero_action, trace.actions[0][1]) if winner == 1 else \
-                       (trace.actions[0][0], self.zero_action)
-            route_states = self.bs.next_action_some(s0, zero_act)
-            discounted_r = [pow(self.gamma, k) * s.feature_func(view=winner)
-                             * ((1.0/(1-self.gamma) if k == len(route_states) - 1 else 1))
-                             for k, s in enumerate(route_states)]
-            mu_bad = sum(discounted_r)
-            ret.append(mu_star - mu_bad)
-        # => [(s0, a1, s1, dis_sum_features, s_final)]
+        lt = LoosedTrace(trace, self.bs)
+        for winner in (1, 2):  # enumerate the winner in player1 and player2
+            split_trace_arr = lt.split(view=winner)
+            for good_trace, weak_trace in split_trace_arr:
+                good_dis_fea = [pow(self.gamma, k) * s.feature_func(view=winner)
+                                * (1.0/(1-self.gamma) if k == len(good_trace) - 1 else 1)
+                                for k, s in enumerate(good_trace)]
+                weak_dis_fea = [pow(self.gamma, k) * s.feature_func(view=winner)
+                                * (1.0 / (1 - self.gamma) if k == len(weak_trace) - 1 else 1)
+                                for k, s in enumerate(weak_trace)]
+                mu_good = sum(good_dis_fea)
+                mu_weak = sum(weak_dis_fea)
+                ret.append(mu_good - mu_weak)
         return ret
 
-    def _split_branch(self, trace_, w_):
+    def _split_branch(self, trace, w) -> List[Tuple[State, float]]:
         ret = []
-        winner = 1 if trace_.final_state().reward() >= 0 else 2
-        split_arr = trace_.split_old()
-        for trace in split_arr:
-            # sample (s1, r_s1) from trace
-            s1 = trace.states[1]
-            r_s1 = [pow(self.gamma, k) * np.dot(s.feature_func(view=winner), w_)
-                     * ((1.0/(1-self.gamma) if k == len(trace.states[1:]) - 1 else 1))
-                     for k, s in enumerate(trace.states[1:])]
-
-            # sample (s0, r_s0) from simulation (should use TODO pure zero_act?
-            s0 = trace.states[0]
-            zero_act = (self.zero_action, trace.actions[0][1]) if winner == 1 else \
-                (trace.actions[0][0], self.zero_action)
-            route_states = self.bs.next_action_some(s0, zero_act)
-            r_s0 = [pow(self.gamma, k) * np.dot(s.feature_func(view=winner), w_)
-                     * ((1.0/(1-self.gamma) if k == len(route_states) - 1 else 1))
-                     for k, s in enumerate(route_states)]
-
-            ret.append((s1, r_s1))
-            ret.append((s0, r_s0))
-
+        lt = LoosedTrace(trace, self.bs)
+        for winner in (1, 2):  # enumerate the winner in player1 and player2
+            split_trace_arr = lt.split(view=winner)
+            for good_trace, weak_trace in split_trace_arr:
+                good_dis_fea = [pow(self.gamma, k) * s.feature_func(view=winner)
+                                * (1.0/(1-self.gamma) if k == len(good_trace) - 1 else 1)
+                                for k, s in enumerate(good_trace)]
+                weak_dis_fea = [pow(self.gamma, k) * s.feature_func(view=winner)
+                                * (1.0 / (1 - self.gamma) if k == len(weak_trace) - 1 else 1)
+                                for k, s in enumerate(weak_trace)]
+                mu_good = sum(good_dis_fea)
+                mu_weak = sum(weak_dis_fea)
+                r_good = np.dot(mu_good, w)
+                r_weak = np.dot(mu_weak, w)
+                ret.append((good_trace[0], r_good))
+                ret.append((weak_trace[0], r_weak))
         return ret
 
 
@@ -298,8 +287,8 @@ class NN(object):
 class Trace(object):
     """Trace: Trajectory with shape like (s_0, a_1, s_1, ..., a_n, s_n) """
     def __init__(self, s0, state_list=None, action_list=None):
-        self.states = [s0]
-        self.actions = [(Action(0),Action(0))] # placeholder for action[0]
+        self.states = [s0]  # type: List[State]
+        self.actions = [(Action(0), Action(0))]  # placeholder for action[0]
         self.step = 0
         if state_list is not None and action_list is not None:
             assert len(state_list) == len(action_list)
@@ -316,7 +305,7 @@ class Trace(object):
     def final_state(self) -> State:
         return self.states[-1]
 
-    def show(self): # IO
+    def show(self):  # IO
         for k, s in enumerate(self.states):
             print('%03d: %s' % (k, str(s)))
 
@@ -325,45 +314,8 @@ class Trace(object):
         self.actions.append((a1, a2))
         self.step += 1
 
-    def split_old(self):
-        isP1Winner = True if self.final_state().reward() >= 0 else False
-        trace_arr = []
-        t_start, t_effect = None, None
-        for t in range(1,self.step):
-            s = self.states[t]
-            if isP1Winner: # 利用转置性质绕过分割逻辑，需要与feature_func同步使用
-                a1, a2 = self.actions[t]
-            else:
-                a2, a1 = self.actions[t]
-            if s.stableQ:
-                if t_effect is None:
-                    # fail, reset and continue
-                    t_start, t_effect = None, None
-                    continue
-                else:
-                    # range from [t_effect, self.step]
-                    split_trace = Trace.from_trace(self, t_effect, self.step)
-                    trace_arr.append(split_trace)
-                    # reset and continue
-                    t_start, t_effect = None, None
-                    continue
-            else:
-                t_start = self.step
-            if a1.zeroQ() and a2.zeroQ():
-                pass
-            if a1.zeroQ() and not a2.zeroQ():
-                t_start, t_effect = t_effect, None
-                if t_start is None:
-                    t_start = self.step
-            if not a1.zeroQ() and a2.zeroQ():
-                if t_effect is None:
-                    t_effect = self.step
-                else:
-                    t_start, t_effect = t_effect, self.step
-            if not a1.zeroQ() and not a2.zeroQ():
-                t_start, t_effect = self.step, self.step
-
-        return trace_arr
+    def split(self):
+        raise NotImplementedError('Please use LoosedTrace(trace).split() instead.')
 
 
 class LoosedTrace(Trace):
@@ -418,17 +370,16 @@ class LoosedTrace(Trace):
                 info1 = self.zero_1[k] if self.zero_1[k] is not None else '  --  '
                 info2 = self.zero_2[k] if self.zero_2[k] is not None else '  --  '
                 info3 = self.real_act[k] if self.real_act[k] is not None else '  --  '
-                print('%03d: %s\t\t%s\t\t%s\t\t%s' %
-                      (k, str(s), info1, info2, info3 ))
+                print('%03d: %s\t\t%s\t\t%s\t\t%s' % (k, str(s), info1, info2, info3))
         print(' --- Side Chain Info ---')
         for k, chain in enumerate(self.side_chain):
             r = chain[-1].reward()
             print('[%03d] [%s] => ... => [%s] R=%d' % (k, str(chain[0]), str(chain[-1]), r))
 
-    def split(self, view=0):
+    def split(self, view=0) -> List[Tuple[np.ndarray, np.ndarray]]:
         """ split pair od advance from trace
         view: 0 - all, 1 - player1 only, 2 - player2 only
-        :return List[(State, np.ndarray)]
+        :return List[Tuple[np.ndarray, np.ndarray]] means List[(good_trace, bad_trace)]
         """
         ret = []
         t_hat = None
@@ -439,17 +390,17 @@ class LoosedTrace(Trace):
                 if idx_real == -1:
                     # [t, end)
                     trace_real = self.states[t:]  # small problem: may encounter loop stable states in tail
-                    t_hat = t
                 else:
                     trace_real = self.states[t:t_hat] + self.side_chain[idx_real]
-                if self.zero_1[t] is not None:
+                if self.zero_1[t] is not None and view in (0, 1):
                     idx_1, reward_1 = self.zero_1[t]
                     if reward_real > reward_1:
                         trace_1 = self.side_chain[idx_1]
                         ret.append((trace_real, trace_1))
-                if self.zero_2[t] is not None:
+                if self.zero_2[t] is not None and view in (0, 2):
                     idx_2, reward_2 = self.zero_2[t]
-                    if reward_real > reward_2:
+                    if reward_real < reward_2:
                         trace_2 = self.side_chain[idx_2]
                         ret.append((trace_real, trace_2))
+                t_hat = t  # record branching point as t_hat
         return ret
