@@ -3,12 +3,13 @@
 #
 # The interfaces of ???
 
-#from keras.models import Sequential
-#from keras.layers import Dense
+from keras.models import Sequential
+from keras.layers import Dense
 from sklearn.svm import LinearSVC
 from sklearn.cross_validation import train_test_split
 import numpy as np
 import random
+from itertools import repeat, chain
 from functools import reduce
 from typing import List, Tuple, Optional
 
@@ -53,6 +54,9 @@ class State(object):
     def load_from_json(self, js):
         pass
 
+    def visual(self, w=None):
+        pass
+
 
 class Action(object):
     """Action: Abstract class for game action representation"""
@@ -74,6 +78,9 @@ class Policy(object):
 
     def action(self, state):
         raise NotImplementedError
+
+    def reset(self):
+        pass
 
 
 class ZeroPolicy(Policy):
@@ -145,6 +152,8 @@ class Game(object):
     def reset(self):
         self.t = 0
         self.max_t = 15
+        self.policy1.reset()
+        self.policy2.reset()
         return self
 
     def start(self, simulator: BaseSimulator):
@@ -153,7 +162,7 @@ class Game(object):
         :rtype: Trace
         :return: the trace generated in the game play
         """
-        st = simulator.initial_state() # type: State
+        st = simulator.initial_state()  # type: State
         trace = Trace(st)
         t = 0
         while t < self.max_t and not st.terminateQ():
@@ -173,7 +182,7 @@ class Game(object):
 
 class IRL(object):
     """IRL: Inverse Reinforcement Learning Module"""
-    def __init__(self, simulator: BaseSimulator, zero_action, gamma=0.99):
+    def __init__(self, simulator: BaseSimulator, zero_action, gamma=0.9):
         self.gamma = gamma
         self.zero_action = zero_action
         self.bs = simulator
@@ -181,13 +190,18 @@ class IRL(object):
     def feed(self, traces):
         # Prepare Data
         dd = [self._split_advantage(trace) for trace in traces]
-        self.data = reduce(lambda x,y: x+y, dd, [])
+        self.data = [item for sublist in dd for item in sublist]
+
         size = len(self.data)
 
+        assert size > 2, 'input size too small'
+
         # Random Flip Some Data
-        # class 0 means good (x1), class 1 means bad (x-1)
-        rs = random.choices([0, 1], k=size)
-        self.X = [d * (1-2*r) for d, r in zip(self.data, rs)]
+        # class 0 means good (x-1), class 1 means bad (x+1)
+        rs = list(chain(repeat(0, size // 2), repeat(1, size - size // 2)))
+        random.shuffle(rs)
+        print(rs)
+        self.X = [d * (2*r-1) for d, r in zip(self.data, rs)]
         self.y = rs
         return self.X, self.y
 
@@ -199,8 +213,8 @@ class IRL(object):
         model.C = hyper_param_c
         model.fit(self.X, self.y)
 
-        self.coef = model.coef_
-        return model.coef_
+        self.coef = np.ravel(model.coef_)
+        return self.coef
 
     def _split_advantage(self, trace) -> List[np.ndarray]:
         ret = []
@@ -219,7 +233,7 @@ class IRL(object):
                 ret.append(mu_good - mu_weak)
         return ret
 
-    def _split_branch(self, trace, w) -> List[Tuple[State, float]]:
+    def _split_branch(self, trace, w) -> List[Tuple[State, np.ndarray, float]]:
         ret = []
         lt = LoosedTrace(trace, self.bs)
         for winner in (1, 2):  # enumerate the winner in player1 and player2
@@ -235,8 +249,8 @@ class IRL(object):
                 mu_weak = sum(weak_dis_fea)
                 r_good = np.dot(mu_good, w)
                 r_weak = np.dot(mu_weak, w)
-                ret.append((good_trace[0], r_good))
-                ret.append((weak_trace[0], r_weak))
+                ret.append((good_trace[0], good_trace[0].feature_func(view=winner), r_good))
+                ret.append((weak_trace[0], weak_trace[0].feature_func(view=winner), r_weak))
         return ret
 
 
@@ -305,9 +319,9 @@ class Trace(object):
     def final_state(self) -> State:
         return self.states[-1]
 
-    def show(self):  # IO
+    def show(self, w=None):  # IO
         for k, s in enumerate(self.states):
-            print('%03d: %s' % (k, str(s)))
+            print('%03d: %s' % (k, s.visual(w)))
 
     def append(self, s, a1, a2):
         self.states.append(s)
@@ -360,23 +374,28 @@ class LoosedTrace(Trace):
                 snap_idx = len(self.side_chain) - 1
             snap_reward = snap_trace[-1].reward()
 
-    def show(self):
+    def show(self, w=None, nn=None):
+        textify = lambda s: s.visual(w, nn)
         for k, s in enumerate(self.states):
+            str_s = textify(s)
             if k == 0:
-                print('%03d: %s\t\tzero_L\t\tzero_R\t\treal_act' % (k, str(s)))
+                print('%03d: %s\t\tzero_L\t\tzero_R\t\treal_act' % (k, str_s))
             elif k == len(self.states) - 1:
-                print('%03d: %s' % (k, str(s)))
+                print('%03d: %s' % (k, str_s))
             else:
                 info1 = self.zero_1[k] if self.zero_1[k] is not None else '  --  '
                 info2 = self.zero_2[k] if self.zero_2[k] is not None else '  --  '
                 info3 = self.real_act[k] if self.real_act[k] is not None else '  --  '
-                print('%03d: %s\t\t%s\t\t%s\t\t%s' % (k, str(s), info1, info2, info3))
+                print('%03d: %s\t\t%s\t\t%s\t\t%s' % (k, str_s, info1, info2, info3))
         print(' --- Side Chain Info ---')
         for k, chain in enumerate(self.side_chain):
             r = chain[-1].reward()
-            print('[%03d] [%s] => ... => [%s] R=%d' % (k, str(chain[0]), str(chain[-1]), r))
+            if len(chain) > 1:
+                print('[%03d] [%s] => ... => [%s] => [%s] R=%d' % (k, textify(chain[0]), textify(chain[-2]), textify(chain[-1]), r))
+            else:
+                print('[%03d] [%s] => ... => [%s] R=%d' % (k, textify(chain[0]), textify(chain[-1]), r))
 
-    def split(self, view=0) -> List[Tuple[np.ndarray, np.ndarray]]:
+    def split(self, view=0) -> List[Tuple[List[State], List[State]]]:
         """ split pair od advance from trace
         view: 0 - all, 1 - player1 only, 2 - player2 only
         :return List[Tuple[np.ndarray, np.ndarray]] means List[(good_trace, bad_trace)]

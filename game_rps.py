@@ -19,8 +19,9 @@ class RPSState(State):
     slot 0-4: 2: [1/0] Scissors
     slot 0-4: 3: [1/0] Paper
     """
-    def __init__(self, s):
+    def __init__(self, s, flag=0):
         super(RPSState, self).__init__(s)
+        self.flag = flag
 
     @staticmethod
     def get_initial_state():
@@ -29,6 +30,7 @@ class RPSState(State):
     def feature_for_player_x(self, player) -> np.ndarray:
         """ state code with mask player==1
         + 6+5+4+3 = 18 => {6: [0]->[1-7], ..., 3: [3]->[4-7]}
+        + 1 => flag for winner
         """
         if player == 1: # player1's view
             this = np.concatenate([a[1:4] * min(a[0],0) for a in self.s])
@@ -40,13 +42,14 @@ class RPSState(State):
             raise RuntimeError('player should be 1 or 2')
         f = lambda a,b,c,x,y,z: a*y+b*z+c*x-b*x-c*y-a*z
         idx = 3*7
-        features = np.zeros(3*7+6+5+4+3) # dim=39
+        features = np.zeros(3*7+6+5+4+3 + 1) # dim=40
         features[0:idx] = this
         for i in range(4):
             for j in range(i+1, 7):
                 features[idx] = f(this[i*3], this[i*3+1], this[i*3+2],
                                   that[j*3], that[j*3+1], that[j*3+2])
                 idx += 1
+        features[idx] = self.flag
         return features
 
     def feature_for_player1(self) -> np.ndarray:
@@ -59,17 +62,16 @@ class RPSState(State):
         return all(a[0] == 0 for a in self.s)
 
     def terminateQ(self) -> bool:
-        return self.s[5, 0] == 1 or self.s[1, 0] == -1
+        return self.flag != 0  #self.s[5, 0] == 1 or self.s[1, 0] == -1
 
     def reward(self) -> int:
-        if self.s[5, 0] == 1:
-            return 1
-        elif self.s[1, 0] == -1:
-            return -1
-        else:
-            return 0
+        return self.flag
 
     def __str__(self):
+        if self.flag == 1:
+            return '-|-|W|I|N|-|-'
+        elif self.flag == -1:
+            return '-|-|L|O|S|-|-'
         a = ['-']*7
         for i, s in enumerate(self.s):
             if s[0] > 0:
@@ -79,6 +81,17 @@ class RPSState(State):
                 a[i] = 'r' if s[1] == 1 else \
                        's' if s[2] == 1 else 'p'
         return '|'.join(a)
+
+    def visual(self, w=None, nn=None):
+        s = str(self)
+        if w is not None:
+            d = np.dot(self.feature_func(), w)
+            if nn is None:
+                s += '(%+.4f)' % d
+            else:
+                nv = nn.predict(self.feature_func().reshape(1,-1))[0, 0]
+                s += '(%+.4f|%+.4f)' % (d, nv)
+        return s
 
 
 class RPSAction(Action):
@@ -104,37 +117,50 @@ class RPSSimulator(BaseSimulator):
     def _step_env(self, state, copy=True):
         f = lambda a, b, c, x, y, z: a * y + b * z + c * x - b * x - c * y - a * z
         s = state.s # name alias
+        flag = 0  # indicator
         if copy:
             s = s.copy()
-        # 1. move right (mask = 1)
-        for i in reversed(range(7)):
-            if s[i, 0] > 0:
-                if i < 6 and s[i+1, 0] < 0:
-                    r = f(s[i,1],s[i,2],s[i,3],s[i+1,1],s[i+1,2],s[i+1,3])
-                    if r > 0: # win
-                        s[i + 1, :] = s[i, :] # move right if win
-                    elif r == 0: # tie
-                        s[i + 1, :] = np.zeros(4) # remove enemy
-                        s[i, :] = np.zeros(4) # remove self
-                if i < 6 and s[i+1, 0] >= 0:
-                    s[i+1, :] = s[i, :] # just move right
-                s[i, :] = np.zeros(4) # clear self, when i=6 it also clears
-        # 2. move left (mask = -1)
-        for i in range(7):
-            if s[i, 0] < 0:
-                if i > 0 and s[i-1, 0] > 0:
-                    r = f(s[i,1],s[i,2],s[i,3],s[i-1,1],s[i-1,2],s[i-1,3])
-                    if r > 0: # win
-                        s[i - 1, :] = s[i, :] # move left if win
-                    elif r == 0:  # tie
-                        s[i - 1, :] = np.zeros(4)  # remove enemy
-                        s[i, :] = np.zeros(4)  # remove self
-                if i > 0 and s[i-1, 0] <= 0:
-                    s[i-1, :] = s[i, :] # just move left
-                s[i, :] = np.zeros(4) # clear self, when i=0 it also clears
-        if copy:
-            return RPSState(s) # wrap s with State
+        # 0. check if win
+        if s[5, 0] > 0:
+            flag = 1
+            s.fill(0)
+        elif s[1, 0] < 0:
+            flag = -1
+            s.fill(0)
         else:
+            # 1. move right (mask = 1)
+            for i in reversed(range(7)):
+                if s[i, 0] > 0:
+                    if i < 6 and s[i+1, 0] < 0:
+                        r = f(s[i,1],s[i,2],s[i,3],s[i+1,1],s[i+1,2],s[i+1,3])
+                        if r > 0: # win
+                            s[i + 1, :] = s[i, :] # move right if win
+                        elif r == 0: # tie
+                            s[i + 1, :] = np.zeros(4) # remove enemy
+                            s[i, :] = np.zeros(4) # remove self
+                    if i < 6 and s[i+1, 0] >= 0:
+                        s[i+1, :] = s[i, :] # just move right
+                    s[i, :] = np.zeros(4) # clear self, when i=6 it also clears
+            # 2. move left (mask = -1)
+            for i in range(7):
+                if s[i, 0] < 0:
+                    if i > 0 and s[i-1, 0] > 0:
+                        r = f(s[i,1],s[i,2],s[i,3],s[i-1,1],s[i-1,2],s[i-1,3])
+                        if r > 0: # win
+                            s[i - 1, :] = s[i, :] # move left if win
+                        elif r == 0:  # tie
+                            s[i - 1, :] = np.zeros(4)  # remove enemy
+                            s[i, :] = np.zeros(4)  # remove self
+                    if i > 0 and s[i-1, 0] <= 0:
+                        s[i-1, :] = s[i, :] # just move left
+                    s[i, :] = np.zeros(4) # clear self, when i=0 it also clears
+                    if i == 1:
+                        flag = -1
+
+        if copy:
+            return RPSState(s, flag=flag) # wrap s with State
+        else:
+            state.flag = flag
             return state # return the parameter, since the reference has changed
 
     def next1(self, state, a1: RPSAction, copy=False):
@@ -178,7 +204,11 @@ class RPSRandomPolicy(Policy):
             self.act_count += 1
         return a
 
-if __name__ == '__main__':
+    def reset(self):
+        self.act_count = 0
+
+
+def test():
     game = Game(RPSRandomPolicy(limit=3), RPSRandomPolicy(limit=3))
     simulator = RPSSimulator()
     game.reset()
@@ -189,3 +219,9 @@ if __name__ == '__main__':
     loose_trace.show()
     splitted = loose_trace.split(view=0)
     X, y = IRL(simulator, RPSAction(0)).feed([trace])
+
+
+if __name__ == '__main__':
+    from coupling import Workflow
+    wf = Workflow(RPSSimulator(), RPSState.get_initial_state(), RPSAction(0))
+    wf.flow(RPSRandomPolicy(limit=3), RPSRandomPolicy(limit=3))
