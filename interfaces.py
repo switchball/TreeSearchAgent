@@ -73,10 +73,10 @@ class Action(object):
 
 class Policy(object):
     """Policy: strategy mapping from State to Action"""
-    def __init__(self):
-        pass
+    def __init__(self, action_type):
+        self.action_type = action_type
 
-    def action(self, state):
+    def action(self, state, player=1):
         raise NotImplementedError
 
     def reset(self):
@@ -85,11 +85,11 @@ class Policy(object):
 
 class ZeroPolicy(Policy):
     """ZeroPolicy: a policy which always returns zero action"""
-    def __init__(self, zero_action=Action(0)):
-        super(ZeroPolicy, self).__init__()
-        self.zero_action = zero_action
+    def __init__(self, action_type):
+        super(ZeroPolicy, self).__init__(action_type)
+        self.zero_action = self.action_type(0)
 
-    def action(self, state):
+    def action(self, state, player=1):
         return self.zero_action
 
 
@@ -108,10 +108,10 @@ class BaseSimulator(object):
     def _step_act(self, state, a1, a2, copy=False):
         return self.next2(self.next1(state, a1, copy), a2, copy)
 
-    def next1(self, state, a1: Action, copy=False):
+    def next1(self, state, a1: Action, copy=False) -> State:
         raise NotImplementedError
 
-    def next2(self, state, a2: Action, copy=False):
+    def next2(self, state, a2: Action, copy=False) -> State:
         raise NotImplementedError
 
     def next(self, state, a1, a2):
@@ -145,7 +145,7 @@ class BaseSimulator(object):
 
 class Game(object):
     """Game: Provide basic two-player zero-sum logic"""
-    def __init__(self, policy1, policy2):
+    def __init__(self, policy1: Policy, policy2: Policy):
         self.policy1 = policy1
         self.policy2 = policy2
 
@@ -166,8 +166,8 @@ class Game(object):
         trace = Trace(st)
         t = 0
         while t < self.max_t and not st.terminateQ():
-            action1 = self.policy1.action(st)
-            action2 = self.policy2.action(st)
+            action1 = self.policy1.action(st, player=1)
+            action2 = self.policy2.action(st, player=2)
             s = simulator._step_env(st)
             s = simulator._step_act(s, action1, action2)
             # add s0, a1, a2, s to Trace
@@ -231,6 +231,12 @@ class IRL(object):
                 mu_good = sum(good_dis_fea)
                 mu_weak = sum(weak_dis_fea)
                 ret.append(mu_good - mu_weak)
+            # the final state is important
+            # final_reward = lt.final_state().reward()
+            # if final_reward > 0:  # it should be better than any given state
+            #     st = lt.states[random.choice(range(lt.step))]
+
+
         return ret
 
     def _split_branch(self, trace, w) -> List[Tuple[State, np.ndarray, float]]:
@@ -296,6 +302,9 @@ class NN(object):
 
     def predict(self, data):
         return self.model.predict(data)
+
+    def predict_one(self, input: np.ndarray) -> float:
+        return self.predict(input.reshape(1, -1))[0, 0]
 
 
 class Trace(object):

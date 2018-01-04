@@ -10,6 +10,7 @@ The game of Rock Paper Scissors
 """
 
 from interfaces import *
+from tree_search import *
 
 
 class RPSState(State):
@@ -49,7 +50,7 @@ class RPSState(State):
                 features[idx] = f(this[i*3], this[i*3+1], this[i*3+2],
                                   that[j*3], that[j*3+1], that[j*3+2])
                 idx += 1
-        features[idx] = self.flag
+        features[idx] = self.flag if player == 1 else +self.flag  # ! this is really important !
         return features
 
     def feature_for_player1(self) -> np.ndarray:
@@ -191,12 +192,12 @@ class RPSSimulator(BaseSimulator):
 class RPSRandomPolicy(Policy):
     """ZeroPolicy: a policy which always returns zero action"""
     def __init__(self, limit=0):
-        super(RPSRandomPolicy, self).__init__()
+        super(RPSRandomPolicy, self).__init__(RPSAction)
         self.action_space = RPSAction.get_action_spaces()
         self.limit = limit
         self.act_count = 0
 
-    def action(self, state):
+    def action(self, state, player=1):
         a = random.choice(self.action_space)
         if self.limit > 0 and self.act_count >= self.limit:
             a = RPSAction(0)
@@ -220,6 +221,12 @@ def test():
     splitted = loose_trace.split(view=0)
     X, y = IRL(simulator, RPSAction(0)).feed([trace])
 
+
+def dry_try():
+    policy0 = BaseTreeSearch(RPSAction, wf.simulator, wf.NN)
+    policy1 = RPSRandomPolicy(limit=3)
+    traces = wf._repeat_game_with_policy(100, policy0, policy1)
+    LoosedTrace(traces[1], wf.simulator).show(wf.IRL.coef, wf.NN)
 
 if __name__ == '__main__':
     from coupling import Workflow

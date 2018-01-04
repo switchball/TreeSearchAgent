@@ -10,6 +10,7 @@ File coupling.py created on 20:47 2018/1/1
 
 import logging
 from interfaces import *
+from tree_search import *
 
 class Workflow(object):
     """Workflow: Put things together"""
@@ -42,10 +43,15 @@ class Workflow(object):
         print(w)
         print(w.shape)
         self._train_nn(traces, w)
-        for i, trace in enumerate(traces[0:100]):
-            print('Trace #%d' % i)
-            LoosedTrace(trace, self.simulator).show(w, self.NN)
+        #for i, trace in enumerate(traces[0:100]):
+        #    print('Trace #%d' % i)
+        #    LoosedTrace(trace, self.simulator).show(w, self.NN)
 
+        print('Testing 100 with trained policy and random policy')
+        policy0 = BaseTreeSearch(self.type_action, self.simulator, self.NN)
+        self._repeat_game_with_policy(100, policy0, _policy1)
+
+        # LoosedTrace(traces[2], wf.simulator).show(wf.IRL.coef, wf.NN)
 
     def _repeat_game_with_policy(self, n, policy1, policy2):
         self.game = Game(policy1, policy2)
@@ -62,6 +68,7 @@ class Workflow(object):
             traces.append(trace)
 
         self.logger.info('W/T/L: %d/%d/%d'%(win,tie,lose))
+        print('W/T/L: %d/%d/%d'%(win,tie,lose))
         return traces
 
     def _train_feature_weight_with_traces(self, traces):
@@ -103,3 +110,5 @@ class Workflow(object):
         for idx in random.sample(range(size), k=10):
             st = dd[idx][0]
             print('[%04d] %s  label~: %+.4f nn~: %+.4f' % (idx, st, y[idx], y_pred[idx]))
+
+
