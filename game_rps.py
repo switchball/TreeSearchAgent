@@ -89,8 +89,8 @@ class RPSAction(Action):
 
     @staticmethod
     def get_action_spaces():
-        return (RPSAction(0), RPSAction(1), )
-        #return (RPSAction(0), RPSAction(1), RPSAction(2), RPSAction(3))
+        #return (RPSAction(0), RPSAction(1), )
+        return (RPSAction(0), RPSAction(1), RPSAction(2), RPSAction(3))
 
 
 class RPSSimulator(BaseSimulator):
@@ -179,8 +179,13 @@ class RPSRandomPolicy(Policy):
         return a
 
 if __name__ == '__main__':
+    print('A')
     game = Game(RPSRandomPolicy(limit=3), RPSRandomPolicy(limit=3))
     simulator = RPSSimulator()
     game.reset()
+    print('B')
     trace = game.start(simulator)
-    trace.show()
+    print('C')
+    # trace.show()
+    loose_trace = LoosedTrace(trace, simulator)
+    loose_trace.show()

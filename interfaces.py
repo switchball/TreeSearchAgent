@@ -3,8 +3,8 @@
 #
 # The interfaces of ???
 
-from keras.models import Sequential
-from keras.layers import Dense
+#from keras.models import Sequential
+#from keras.layers import Dense
 from sklearn.svm import LinearSVC
 from sklearn.cross_validation import train_test_split
 import numpy as np
@@ -112,26 +112,28 @@ class BaseSimulator(object):
         s = self._step_env(state, copy=True)
         return self._step_act(s, a1, a2, copy=False)
 
-    def next_empty_n(self, state, n):
+    def next_empty_some(self, state, f=lambda s: s.stableQ() or s.terminateQ(), max_t=100):
         s = state
         ss = []
-        for i in range(n):
+        for i in range(max_t):
             s = self._step_env(s)
             ss.append(s)
-        return ss
-
-    def next_action_n(self, state, actions, n, max_t=100):
-        a1, a2 = actions
-        s = state
-        ss = []
-        # trans = lambda s: self.next2(self.next1(state, a1), a2)
-        for i in range(min(n, max_t)):
-            s = self.next(s, a1, a2)
-            ss.append(s)
-            if s.stableQ():
+            if f(s):
                 break
         return ss
 
+    def next_action_some(self, state, actions, f=lambda s: s.stableQ() or s.terminateQ(), max_t=100):
+        a1, a2 = actions
+        s = state
+        ss = []
+        for i in range(max_t):
+            s = self._step_env(s)
+            if i == 0:  # only execute action at first time step
+                s = self._step_act(s, a1, a2)
+            ss.append(s)
+            if f(s):
+                break
+        return ss
 
 
 class Game(object):
@@ -204,7 +206,7 @@ class IRL(object):
     def _split_advantage(self, trace_):
         ret = []
         winner = 1 if trace_.final_state().reward() >= 0 else 2
-        split_arr = trace_.split()
+        split_arr = trace_.split_old()
         for trace in split_arr:
             s0 = trace.states[0]
             discounted_r = [pow(self.gamma, k) * s.feature_func(view=winner)
@@ -214,7 +216,7 @@ class IRL(object):
             #route_states = self.bs.next_action_n(s0, trace.actions[0], 100)
             zero_act = (self.zero_action, trace.actions[0][1]) if winner == 1 else \
                        (trace.actions[0][0], self.zero_action)
-            route_states = self.bs.next_action_n(s0, zero_act, 100)
+            route_states = self.bs.next_action_some(s0, zero_act)
             discounted_r = [pow(self.gamma, k) * s.feature_func(view=winner)
                              * ((1.0/(1-self.gamma) if k == len(route_states) - 1 else 1))
                              for k, s in enumerate(route_states)]
@@ -226,7 +228,7 @@ class IRL(object):
     def _split_branch(self, trace_, w_):
         ret = []
         winner = 1 if trace_.final_state().reward() >= 0 else 2
-        split_arr = trace_.split()
+        split_arr = trace_.split_old()
         for trace in split_arr:
             # sample (s1, r_s1) from trace
             s1 = trace.states[1]
@@ -238,7 +240,7 @@ class IRL(object):
             s0 = trace.states[0]
             zero_act = (self.zero_action, trace.actions[0][1]) if winner == 1 else \
                 (trace.actions[0][0], self.zero_action)
-            route_states = self.bs.next_action_n(s0, zero_act, 100)
+            route_states = self.bs.next_action_some(s0, zero_act)
             r_s0 = [pow(self.gamma, k) * np.dot(s.feature_func(view=winner), w_)
                      * ((1.0/(1-self.gamma) if k == len(route_states) - 1 else 1))
                      for k, s in enumerate(route_states)]
@@ -265,14 +267,14 @@ class NN(object):
         assert len(hs) > 0
         model.add(Dense(hs[0], input_dim=self.input_dim, activation='relu'))
         for n in hs[1:]:
-            model.add(Dense(n, activation='relu')) # hidden layers
-        model.add(Dense(self.output_dim)) # output value with no activation
+            model.add(Dense(n, activation='relu'))  # hidden layers
+        model.add(Dense(self.output_dim))  # output value with no activation
         model.compile(loss='mean_squared_error', optimizer='adam')
         return model
 
     def train(self, data, labels):
         self.model.fit(data, labels, validation_split=0.2, epochs=self.epochs,
-                        batch_size=self.batch_size)
+                       batch_size=self.batch_size)
 
     def train_kfold(self, X, Y):
         from sklearn.model_selection import StratifiedKFold
@@ -323,7 +325,7 @@ class Trace(object):
         self.actions.append((a1, a2))
         self.step += 1
 
-    def split(self):
+    def split_old(self):
         isP1Winner = True if self.final_state().reward() >= 0 else False
         trace_arr = []
         t_start, t_effect = None, None
@@ -363,3 +365,91 @@ class Trace(object):
 
         return trace_arr
 
+
+class LoosedTrace(Trace):
+    """LoosedTrace: Trace with simulated zero-action branch"""
+    def __init__(self, trace, simulator):
+        super(LoosedTrace, self).__init__(trace.states[0], trace.states[1:], trace.actions[1:])
+        self.zero_1 = [None] * self.step  # simulated zero-act for player 1
+        self.zero_2 = [None] * self.step  # simulated zero-act for player 2
+        self.real_act = [None] * self.step  # (mixed simulated) real-act
+        self.side_chain = []  # contains simulated trace (but with no actions)
+        self._loose(simulator)
+
+    def _loose(self, simulator: BaseSimulator):
+        snap_idx = -1                              # terminal state's idx = -1
+        snap_reward = self.final_state().reward()  # snapshot reward is final state's reward
+        for t in reversed(range(self.step)):
+            a1, a2 = self.actions[t]
+            if a1.zeroQ() and a2.zeroQ():
+                continue
+            # then at least one of a1 and a2 is non-zero action
+            self.real_act[t] = (snap_idx, snap_reward)
+
+            simulated_trace = None
+            if not a1.zeroQ():
+                simulated_trace = simulator.next_action_some(self.states[t-1], (Action(0), a2))
+                simulated_reward = simulated_trace[-1].reward()
+                self.zero_1[t] = (len(self.side_chain), simulated_reward)  # (len(self.side_chain), simulated_reward)
+                self.side_chain.append(simulated_trace)
+            if not a2.zeroQ():
+                simulated_trace = simulator.next_action_some(self.states[t-1], (a1, Action(0)))
+                simulated_reward = simulated_trace[-1].reward()
+                self.zero_2[t] = (len(self.side_chain), simulated_reward)
+                self.side_chain.append(simulated_trace)
+            if not a1.zeroQ() and not a2.zeroQ():
+                # prepare simulation with (a1, a2) = (0, 0), following time t-1
+                snap_trace = simulator.next_empty_some(self.states[t - 1])
+                self.side_chain.append(snap_trace)
+                snap_idx = len(self.side_chain) - 1
+            else:
+                # the (a1, a2) = (0, 0) trace has been simulated
+                snap_trace = simulated_trace
+                snap_idx = len(self.side_chain) - 1
+            snap_reward = snap_trace[-1].reward()
+
+    def show(self):
+        for k, s in enumerate(self.states):
+            if k == 0:
+                print('%03d: %s\t\tzero_L\t\tzero_R\t\treal_act' % (k, str(s)))
+            elif k == len(self.states) - 1:
+                print('%03d: %s' % (k, str(s)))
+            else:
+                info1 = self.zero_1[k] if self.zero_1[k] is not None else '  --  '
+                info2 = self.zero_2[k] if self.zero_2[k] is not None else '  --  '
+                info3 = self.real_act[k] if self.real_act[k] is not None else '  --  '
+                print('%03d: %s\t\t%s\t\t%s\t\t%s' %
+                      (k, str(s), info1, info2, info3 ))
+        print(' --- Side Chain Info ---')
+        for k, chain in enumerate(self.side_chain):
+            r = chain[-1].reward()
+            print('[%03d] [%s] => ... => [%s] R=%d' % (k, str(chain[0]), str(chain[-1]), r))
+
+    def split(self, view=0):
+        """ split pair od advance from trace
+        view: 0 - all, 1 - player1 only, 2 - player2 only
+        :return List[(State, np.ndarray)]
+        """
+        ret = []
+        t_hat = None
+        for t in reversed(range(self.step)):
+            if self.real_act[t] is not None:
+                idx_real, reward_real = self.real_act[t]
+                # get trace_real
+                if idx_real == -1:
+                    # [t, end)
+                    trace_real = self.states[t:]  # small problem: may encounter loop stable states in tail
+                    t_hat = t
+                else:
+                    trace_real = self.states[t:t_hat] + self.side_chain[idx_real]
+                if self.zero_1[t] is not None:
+                    idx_1, reward_1 = self.zero_1[t]
+                    if reward_real > reward_1:
+                        trace_1 = self.side_chain[idx_1]
+                        ret.append((trace_real, trace_1))
+                if self.zero_2[t] is not None:
+                    idx_2, reward_2 = self.zero_2[t]
+                    if reward_real > reward_2:
+                        trace_2 = self.side_chain[idx_2]
+                        ret.append((trace_real, trace_2))
+        return ret
