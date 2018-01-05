@@ -34,11 +34,11 @@ class RPSState(State):
         + 1 => flag for winner
         """
         if player == 1: # player1's view
-            this = np.concatenate([a[1:4] * min(a[0],0) for a in self.s])
-            that = np.concatenate([a[1:4] * min(-a[0],0) for a in self.s])
+            this = np.concatenate([a[1:4] * max(a[0],0) for a in self.s])
+            that = np.concatenate([a[1:4] * max(-a[0],0) for a in self.s])
         elif player == 2: # player2's view
-            this = np.concatenate([a[1:4] * min(-a[0],0) for a in reversed(self.s)])
-            that = np.concatenate([a[1:4] * min(a[0],0) for a in reversed(self.s)])
+            this = np.concatenate([a[1:4] * max(-a[0],0) for a in reversed(self.s)])
+            that = np.concatenate([a[1:4] * max(a[0],0) for a in reversed(self.s)])
         else:
             raise RuntimeError('player should be 1 or 2')
         f = lambda a,b,c,x,y,z: a*y+b*z+c*x-b*x-c*y-a*z
@@ -50,7 +50,7 @@ class RPSState(State):
                 features[idx] = f(this[i*3], this[i*3+1], this[i*3+2],
                                   that[j*3], that[j*3+1], that[j*3+2])
                 idx += 1
-        features[idx] = self.flag if player == 1 else +self.flag  # ! this is really important !
+        features[idx] = self.flag if player == 1 else -self.flag  # ! this is really important !
         return features
 
     def feature_for_player1(self) -> np.ndarray:
@@ -124,39 +124,34 @@ class RPSSimulator(BaseSimulator):
         # 0. check if win
         if s[5, 0] > 0:
             flag = 1
-            s.fill(0)
         elif s[1, 0] < 0:
             flag = -1
-            s.fill(0)
-        else:
-            # 1. move right (mask = 1)
-            for i in reversed(range(7)):
-                if s[i, 0] > 0:
-                    if i < 6 and s[i+1, 0] < 0:
-                        r = f(s[i,1],s[i,2],s[i,3],s[i+1,1],s[i+1,2],s[i+1,3])
-                        if r > 0: # win
-                            s[i + 1, :] = s[i, :] # move right if win
-                        elif r == 0: # tie
-                            s[i + 1, :] = np.zeros(4) # remove enemy
-                            s[i, :] = np.zeros(4) # remove self
-                    if i < 6 and s[i+1, 0] >= 0:
-                        s[i+1, :] = s[i, :] # just move right
-                    s[i, :] = np.zeros(4) # clear self, when i=6 it also clears
-            # 2. move left (mask = -1)
-            for i in range(7):
-                if s[i, 0] < 0:
-                    if i > 0 and s[i-1, 0] > 0:
-                        r = f(s[i,1],s[i,2],s[i,3],s[i-1,1],s[i-1,2],s[i-1,3])
-                        if r > 0: # win
-                            s[i - 1, :] = s[i, :] # move left if win
-                        elif r == 0:  # tie
-                            s[i - 1, :] = np.zeros(4)  # remove enemy
-                            s[i, :] = np.zeros(4)  # remove self
-                    if i > 0 and s[i-1, 0] <= 0:
-                        s[i-1, :] = s[i, :] # just move left
-                    s[i, :] = np.zeros(4) # clear self, when i=0 it also clears
-                    if i == 1:
-                        flag = -1
+        # 1. move right (mask = 1)
+        for i in reversed(range(7)):
+            if s[i, 0] > 0:
+                if i < 6 and s[i+1, 0] < 0:
+                    r = f(s[i,1],s[i,2],s[i,3],s[i+1,1],s[i+1,2],s[i+1,3])
+                    if r > 0: # win
+                        s[i + 1, :] = s[i, :] # move right if win
+                    elif r == 0: # tie
+                        s[i + 1, :] = np.zeros(4) # remove enemy
+                        s[i, :] = np.zeros(4) # remove self
+                if i < 6 and s[i+1, 0] >= 0:
+                    s[i+1, :] = s[i, :] # just move right
+                s[i, :] = np.zeros(4) # clear self, when i=6 it also clears
+        # 2. move left (mask = -1)
+        for i in range(7):
+            if s[i, 0] < 0:
+                if i > 0 and s[i-1, 0] > 0:
+                    r = f(s[i,1],s[i,2],s[i,3],s[i-1,1],s[i-1,2],s[i-1,3])
+                    if r > 0: # win
+                        s[i - 1, :] = s[i, :] # move left if win
+                    elif r == 0:  # tie
+                        s[i - 1, :] = np.zeros(4)  # remove enemy
+                        s[i, :] = np.zeros(4)  # remove self
+                if i > 0 and s[i-1, 0] <= 0:
+                    s[i-1, :] = s[i, :] # just move left
+                s[i, :] = np.zeros(4) # clear self, when i=0 it also clears
 
         if copy:
             return RPSState(s, flag=flag) # wrap s with State
