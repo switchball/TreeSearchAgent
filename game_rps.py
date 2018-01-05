@@ -225,6 +225,35 @@ class HandRPSPolicy(Policy):
         return RPSAction(a)
 
 
+import keyboard  # Using module keyboard
+class InteractiveRPSPolicy(Policy):
+    def __init__(self):
+        super(InteractiveRPSPolicy, self).__init__(RPSAction)
+
+    def action(self, state: State, player=1):
+        a = None
+        print('==> %s  \t R > S > P' % state)
+        while True:  # making a loop
+            try:  # used try so that if user pressed other than the given key error will not be shown
+                if keyboard.is_pressed('1'):  # if key 'q' is pressed
+                    a = 1
+                    break  # finishing the loop
+                elif keyboard.is_pressed('2'):
+                    a = 2
+                    break
+                elif keyboard.is_pressed('3'):
+                    a = 3
+                    break
+                elif keyboard.is_pressed('0'):
+                    a = 0
+                    pass
+            except:
+                print('1 - Rock, 2 - Scissors, 3 - Paper ')
+                pass  # if user pressed other than the given key the loop will break
+
+        keyboard.stash_state()  # remove the key press state
+        return RPSAction(a)
+
 def test():
     game = Game(RPSRandomPolicy(limit=10), RPSRandomPolicy(limit=10), max_step=25)
     simulator = RPSSimulator()
@@ -247,5 +276,6 @@ def dry_try():
 if __name__ == '__main__':
     from coupling import Workflow
     tp = Exploration(HandRPSPolicy(), epsilon=0.1)
-    wf = Workflow(RPSSimulator(), RPSState.get_initial_state(), RPSAction(0), test_policy=tp)
+    itp = InteractiveRPSPolicy()
+    wf = Workflow(RPSSimulator(), RPSState.get_initial_state(), RPSAction(0), test_policy=itp)
     wf.flow(RPSRandomPolicy(limit=3), RPSRandomPolicy(limit=3))

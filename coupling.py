@@ -64,7 +64,7 @@ class Workflow(object):
         # note the policy is stateless
         self.traces = self._repeat_game_with_policy(20, policy01, policy01_exp)
 
-        self._judge_policy(policy01, tag='v0.1', n=100)
+        self._judge_policy(policy01, tag='v0.1', n=1)
 
         print('use replay of version 0.1 to train weight')
         w2 = self._train_feature_weight_with_traces(self.traces)
@@ -79,7 +79,7 @@ class Workflow(object):
         policy02_exp = Exploration(policy02, epsilon=0.3)
         self.traces = self._repeat_game_with_policy(100, policy02, policy02_exp)
 
-        self._judge_policy(policy02, tag='v0.2', n=100)
+        self._judge_policy(policy02, tag='v0.2', n=1)
 
 
         # LoosedTrace(traces[2], wf.simulator).show(wf.IRL.coef, wf.NN)
@@ -89,6 +89,7 @@ class Workflow(object):
         self.simulator.reset_cnt()
         total, win, tie, lose = 0, 0, 0, 0
         traces = []
+        lose_idx = []
         ts = time.time()
         for e in range(n):
             self.game.reset()
@@ -98,8 +99,10 @@ class Workflow(object):
             win += 1 if reward > 0 else 0
             tie += 1 if reward == 0 else 0
             lose += 1 if reward < 0 else 0
+            if reward < 0:
+                lose_idx.append(e)
             traces.append(trace)
-            if e % (n//5) == (n//5-1):
+            if n >= 5 and e % (n//5) == (n//5-1):
                 print("[%-10s] %d%% - W/T/L: %d/%d/%d" % ('=' * (10 * (e + 1) // n), (100 * (e + 1) // n), win, tie, lose))
                 #sys.stdout.write("[%-60s] %d%%" % ('=' * (60 * (e + 1) / 10), (100 * (e + 1) / 10)))
                 #sys.stdout.flush()
@@ -110,6 +113,7 @@ class Workflow(object):
         t = time.time() - ts
         self.logger.info('W/T/L: %d/%d/%d - Time: %.1f s'%(win, tie, lose, t))
         print('W/T/L: %d/%d/%d - Time: %.1f s'%(win, tie, lose, t))
+        print('Lose idx:', lose_idx)
         step_cnt, act_cnt = self.simulator.reset_cnt()
         print('step_cnt: %d, act_cnt: %d' % (step_cnt, act_cnt))
         return traces
