@@ -11,7 +11,7 @@ import numpy as np
 import random
 from itertools import repeat, chain
 from functools import reduce
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Type, Optional
 
 
 class State(object):
@@ -73,10 +73,10 @@ class Action(object):
 
 class Policy(object):
     """Policy: strategy mapping from State to Action"""
-    def __init__(self, action_type):
+    def __init__(self, action_type: Type[Action]):
         self.action_type = action_type
 
-    def action(self, state, player=1):
+    def action(self, state, player=1) -> Action:
         raise NotImplementedError
 
     def reset(self):
@@ -93,6 +93,20 @@ class ZeroPolicy(Policy):
         return self.zero_action
 
 
+class Exploration(Policy):
+    def __init__(self, base_policy: Policy, epsilon=0.05):
+        super(Exploration, self).__init__(base_policy.action_type)
+        self.base_policy = base_policy
+        self.epsilon = epsilon
+        self.action_space = self.action_type.get_action_spaces()
+
+    def action(self, state, player=1):
+        if random.random() < self.epsilon:
+            return random.choice(self.action_space)
+        else:
+            return self.base_policy.action(state, player)
+
+
 class BaseSimulator(object):
     """BaseSimulator: Provide n-step simulation of the state"""
     def __init__(self):
@@ -102,16 +116,16 @@ class BaseSimulator(object):
         # Note: should return State.get_initial_state()
         raise NotImplementedError
 
-    def _step_env(self, state, copy=True):
+    def _step_env(self, state: State, copy=True):
         raise NotImplementedError
 
-    def _step_act(self, state, a1, a2, copy=False):
+    def _step_act(self, state: State, a1: Action, a2: Action, copy=False):
         return self.next2(self.next1(state, a1, copy), a2, copy)
 
-    def next1(self, state, a1: Action, copy=False) -> State:
+    def next1(self, state: State, a1: Action, copy=False) -> State:
         raise NotImplementedError
 
-    def next2(self, state, a2: Action, copy=False) -> State:
+    def next2(self, state: State, a2: Action, copy=False) -> State:
         raise NotImplementedError
 
     def next(self, state, a1, a2):
@@ -151,7 +165,7 @@ class Game(object):
 
     def reset(self):
         self.t = 0
-        self.max_t = 15
+        self.max_t = 25
         self.policy1.reset()
         self.policy2.reset()
         return self
@@ -395,7 +409,7 @@ class LoosedTrace(Trace):
                 info1 = self.zero_1[k] if self.zero_1[k] is not None else '  --  '
                 info2 = self.zero_2[k] if self.zero_2[k] is not None else '  --  '
                 info3 = self.real_act[k] if self.real_act[k] is not None else '  --  '
-                print('%03d: %s\t\t%s\t\t%s\t\t%s' % (k, str_s, info1, info2, info3))
+                print('%03d: %s\t\t%s  \t%s  \t%s' % (k, str_s, info1, info2, info3))
         print(' --- Side Chain Info ---')
         for k, chain in enumerate(self.side_chain):
             r = chain[-1].reward()

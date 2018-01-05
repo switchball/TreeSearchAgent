@@ -23,22 +23,22 @@ class Workflow(object):
         self.type_action = type(zero_action)
 
         # self.game = Game()
-        self.IRL = IRL(simulator, zero_action)
+        self.IRL = IRL(simulator, zero_action, gamma=0.5)
         input_dim = len(initial_state.feature_func())
         hidden_units = [128, 128, 32]
         batch_size = 16
-        epochs = 10
+        epochs = 6
         self.NN = NN(input_dim, hidden_units, batch_size, epochs)
 
     def command(self):
         pass
 
     def flow(self, _policy1, _policy2):
-        traces = self._repeat_game_with_policy(1000, _policy1, _policy2)
+        traces = self._repeat_game_with_policy(100, _policy1, _policy2)
         w = self._train_feature_weight_with_traces(traces)
-        for i, trace in enumerate(traces):
-            print('Trace #%d' % i)
-            LoosedTrace(trace, self.simulator).show(w)
+        # for i, trace in enumerate(traces):
+            # print('Trace #%d' % i)
+            # LoosedTrace(trace, self.simulator).show(w)
         self.logger.info(w)
         print(w)
         print(w.shape)
@@ -50,6 +50,17 @@ class Workflow(object):
         print('Testing 100 with trained policy and random policy')
         policy0 = BaseTreeSearch(self.type_action, self.simulator, self.NN)
         self._repeat_game_with_policy(100, policy0, _policy1)
+
+        print('Testing 100 with trained policy and trained policy')
+        policy0 = BaseTreeSearch(self.type_action, self.simulator, self.NN)
+        # note the policy is stateless
+        self._repeat_game_with_policy(100, policy0, policy0)
+
+        print('Testing 100 with trained policy and trained policy with exploration')
+        policy0 = BaseTreeSearch(self.type_action, self.simulator, self.NN)
+        policy_exp = Exploration(policy0, epsilon=0.3)
+        # note the policy is stateless
+        self.traces = self._repeat_game_with_policy(100, policy0, policy_exp)
 
         # LoosedTrace(traces[2], wf.simulator).show(wf.IRL.coef, wf.NN)
 
@@ -101,14 +112,34 @@ class Workflow(object):
         #auc = roc_auc_score(y_label, y_pred)  # label, score
         #print('AUC:', auc)
 
+        import matplotlib.cm
         import matplotlib.pyplot as plt
-        plt.scatter(y, y_pred, c=None, marker='x', s=100)
+        from scipy.stats import gaussian_kde
+
+        # Calculate the point density
+        xy = np.vstack([y, y_pred])
+        z0 = gaussian_kde(xy)(xy)
+
+        # Sort the points by density, so that the densest points are plotted last
+        idx = z0.argsort()
+        x0, y0, z0 = y[idx], y_pred[idx], z0[idx]
+
+        fig, ax = plt.subplots()
+        ax.scatter(x0, y0, c=z0, s=50, edgecolor='')
         plt.axis('equal')
         plt.show()
 
         size = len(y)
-        for idx in random.sample(range(size), k=10):
+        distances = np.array([abs(a-b) for a,b in zip(y, y_pred)])
+
+        idxes = distances.argsort()
+
+        for idx in idxes[-30:]:
             st = dd[idx][0]
             print('[%04d] %s  label~: %+.4f nn~: %+.4f' % (idx, st, y[idx], y_pred[idx]))
 
+        for idx in range(size):
+            st = dd[idx][0]
+            if st.flag != 0:
+                print('[%04d] %s  label~: %+.4f nn~: %+.4f' % (idx, st, y[idx], y_pred[idx]))
 
