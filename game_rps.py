@@ -116,6 +116,7 @@ class RPSSimulator(BaseSimulator):
         return RPSState.get_initial_state()
 
     def _step_env(self, state, copy=True):
+        self.step_cnt += 1  # this is the requirement of super class
         f = lambda a, b, c, x, y, z: a * y + b * z + c * x - b * x - c * y - a * z
         s = state.s # name alias
         flag = 0  # indicator

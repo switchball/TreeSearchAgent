@@ -110,16 +110,24 @@ class Exploration(Policy):
 class BaseSimulator(object):
     """BaseSimulator: Provide n-step simulation of the state"""
     def __init__(self):
-        pass
+        self.step_cnt = 0
+        self.act_cnt = 0
+
+    def reset_cnt(self):
+        a, b = self.step_cnt, self.act_cnt
+        self.step_cnt, self.act_cnt = 0, 0
+        return a, b
 
     def initial_state(self):
         # Note: should return State.get_initial_state()
         raise NotImplementedError
 
     def _step_env(self, state: State, copy=True):
+        # Note: should contains self.step_cnt += 1
         raise NotImplementedError
 
     def _step_act(self, state: State, a1: Action, a2: Action, copy=False):
+        self.act_cnt += 1
         return self.next2(self.next1(state, a1, copy), a2, copy)
 
     def next1(self, state: State, a1: Action, copy=False) -> State:

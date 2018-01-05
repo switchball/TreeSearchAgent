@@ -8,6 +8,7 @@ File coupling.py created on 20:47 2018/1/1
 @version: 1.0
 """
 
+import time
 import logging
 from interfaces import *
 from tree_search import *
@@ -51,10 +52,10 @@ class Workflow(object):
         policy0 = BaseTreeSearch(self.type_action, self.simulator, self.NN)
         self._repeat_game_with_policy(100, policy0, _policy1)
 
-        print('Testing 100 with trained policy and trained policy')
-        policy0 = BaseTreeSearch(self.type_action, self.simulator, self.NN)
+        #print('Testing 100 with trained policy and trained policy')
+        #policy0 = BaseTreeSearch(self.type_action, self.simulator, self.NN)
         # note the policy is stateless
-        self._repeat_game_with_policy(100, policy0, policy0)
+        #self._repeat_game_with_policy(100, policy0, policy0)
 
         print('Testing 100 with trained policy and trained policy with exploration')
         policy0 = BaseTreeSearch(self.type_action, self.simulator, self.NN)
@@ -66,8 +67,10 @@ class Workflow(object):
 
     def _repeat_game_with_policy(self, n, policy1, policy2):
         self.game = Game(policy1, policy2)
+        self.simulator.reset_cnt()
         total, win, tie, lose = 0, 0, 0, 0
         traces = []
+        ts = time.time()
         for i in range(n):
             self.game.reset()
             trace = self.game.start(self.simulator)
@@ -77,9 +80,15 @@ class Workflow(object):
             tie += 1 if reward == 0 else 0
             lose += 1 if reward < 0 else 0
             traces.append(trace)
+            if n % (n//25) == 0:
+                print('>', end='')
 
-        self.logger.info('W/T/L: %d/%d/%d'%(win,tie,lose))
-        print('W/T/L: %d/%d/%d'%(win,tie,lose))
+        print()
+        t = time.time() - ts
+        self.logger.info('W/T/L: %d/%d/%d - Time: %.1f s'%(win, tie, lose, t))
+        print('W/T/L: %d/%d/%d - Time: %.1f s'%(win, tie, lose, t))
+        step_cnt, act_cnt = self.simulator.reset_cnt()
+        print('step_cnt: %d, act_cnt: %d' % (step_cnt, act_cnt))
         return traces
 
     def _train_feature_weight_with_traces(self, traces):
