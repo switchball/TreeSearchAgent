@@ -205,6 +205,26 @@ class RPSRandomPolicy(Policy):
         self.act_count = 0
 
 
+class HandRPSPolicy(Policy):
+    def __init__(self):
+        super(HandRPSPolicy, self).__init__(RPSAction)
+
+    def action(self, state: RPSState, player=1):
+        s = state.s
+        a = 0
+        if player == 1:
+            if s[6, 0] < 0:
+                a = 1 if s[6, 1] > 0 else 2 if s[6, 2] > 0 else 3
+            else:
+                a = 0
+        elif player == 2:
+            if s[0, 0] > 0:
+                a = 1 if s[0, 1] > 0 else 2 if s[0, 2] > 0 else 3
+            else:
+                a = 0
+        return RPSAction(a)
+
+
 def test():
     game = Game(RPSRandomPolicy(limit=10), RPSRandomPolicy(limit=10), max_step=25)
     simulator = RPSSimulator()
@@ -226,5 +246,6 @@ def dry_try():
 
 if __name__ == '__main__':
     from coupling import Workflow
-    wf = Workflow(RPSSimulator(), RPSState.get_initial_state(), RPSAction(0))
+    tp = Exploration(HandRPSPolicy(), epsilon=0.1)
+    wf = Workflow(RPSSimulator(), RPSState.get_initial_state(), RPSAction(0), test_policy=tp)
     wf.flow(RPSRandomPolicy(limit=3), RPSRandomPolicy(limit=3))

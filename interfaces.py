@@ -76,7 +76,7 @@ class Policy(object):
     def __init__(self, action_type: Type[Action]):
         self.action_type = action_type
 
-    def action(self, state, player=1) -> Action:
+    def action(self, state: State, player=1) -> Action:
         raise NotImplementedError
 
     def reset(self):
