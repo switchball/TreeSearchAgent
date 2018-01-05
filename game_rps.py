@@ -90,7 +90,7 @@ class RPSState(State):
             if nn is None:
                 s += '(%+.4f)' % d
             else:
-                nv = nn.predict(self.feature_func().reshape(1,-1))[0, 0]
+                nv = nn.predict_one(self.feature_func())
                 s += '(%+.4f|%+.4f)' % (d, nv)
         return s
 

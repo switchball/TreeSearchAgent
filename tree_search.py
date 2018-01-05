@@ -30,7 +30,6 @@ class BaseTreeSearch(Policy):
         idx = 0
         for a_me in action_space:
             for a_op in action_space:
-                # TODO
                 if player == 1:
                     st = self.simulator._step_act(s_, a_me, a_op, copy=True)
                 elif player == 2:

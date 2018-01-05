@@ -38,16 +38,11 @@ class Workflow(object):
     def flow(self, _policy1, _policy2):
         traces = self._repeat_game_with_policy(100, _policy1, _policy2)
         w = self._train_feature_weight_with_traces(traces)
-        # for i, trace in enumerate(traces):
-            # print('Trace #%d' % i)
-            # LoosedTrace(trace, self.simulator).show(w)
+
         self.logger.info(w)
         print(w)
         print(w.shape)
         self._train_nn(traces, w)
-        #for i, trace in enumerate(traces[0:100]):
-        #    print('Trace #%d' % i)
-        #    LoosedTrace(trace, self.simulator).show(w, self.NN)
 
         print('Testing 100 with trained policy and random policy')
         policy0 = BaseTreeSearch(self.type_action, self.simulator, self.NN)
@@ -80,9 +75,7 @@ class Workflow(object):
         self.traces = self._repeat_game_with_policy(100, policy02, policy02_exp)
 
         self._judge_policy(policy02, tag='v0.2', n=1)
-
-
-        # LoosedTrace(traces[2], wf.simulator).show(wf.IRL.coef, wf.NN)
+        # hint: LoosedTrace(traces[2], wf.simulator).show(wf.IRL.coef, wf.NN)
 
     def _repeat_game_with_policy(self, n, policy1, policy2):
         self.game = Game(policy1, policy2)
@@ -104,10 +97,6 @@ class Workflow(object):
             traces.append(trace)
             if n >= 5 and e % (n//5) == (n//5-1):
                 print("[%-10s] %d%% - W/T/L: %d/%d/%d" % ('=' * (10 * (e + 1) // n), (100 * (e + 1) // n), win, tie, lose))
-                #sys.stdout.write("[%-60s] %d%%" % ('=' * (60 * (e + 1) / 10), (100 * (e + 1) / 10)))
-                #sys.stdout.flush()
-                #sys.stdout.write(", epoch %d" % (e + 1))
-                #sys.stdout.flush()
 
         print()
         t = time.time() - ts
@@ -131,7 +120,6 @@ class Workflow(object):
         data = [(sf, r) for s, sf, r in dd]
         size = len(data)
 
-        # X, y = zip(*data)
         X, y = [list(t) for t in zip(*data)]
         X = np.array(X)
         y = np.array(y).transpose()
@@ -142,28 +130,6 @@ class Workflow(object):
         y_pred = np.ravel(self.NN.predict(X))
         self.y = y
         self.y_pred = y_pred
-
-        #from sklearn.metrics import roc_auc_score
-        #y_label = [0 if a < -0.5 else 1 if a < 0.5 else 2 for a in y]
-        #auc = roc_auc_score(y_label, y_pred)  # label, score
-        #print('AUC:', auc)
-
-        import matplotlib.cm
-        import matplotlib.pyplot as plt
-        from scipy.stats import gaussian_kde
-
-        # Calculate the point density
-        # xy = np.vstack([y, y_pred])
-        # z0 = gaussian_kde(xy)(xy)
-
-        # Sort the points by density, so that the densest points are plotted last
-        # idx = z0.argsort()
-        # x0, y0, z0 = y[idx], y_pred[idx], z0[idx]
-
-        # fig, ax = plt.subplots()
-        # ax.scatter(x0, y0, c=z0, s=50, edgecolor='')
-        # plt.axis('equal')
-        # plt.show()
 
     def _judge_policy(self, policy_to_be_judged, tag='', n=100):
         if self.test_policy is None:

@@ -67,7 +67,7 @@ class Action(object):
     def get_action_spaces():
         pass
 
-    def zeroQ(self):
+    def zeroQ(self) -> bool:
         return self.a == 0
 
 
@@ -216,7 +216,6 @@ class IRL(object):
         self.data = [item for sublist in dd for item in sublist]
 
         size = len(self.data)
-
         assert size > 2, 'input size too small'
 
         # Random Flip Some Data
@@ -228,8 +227,6 @@ class IRL(object):
         return self.X, self.y
 
     def train_w(self, hyper_param_c=1.0):
-        # TODO IRL Algorithm needed
-
         # Train with linear svm (with no bias)
         model = LinearSVC(random_state=0, fit_intercept=False)
         model.C = hyper_param_c
@@ -257,7 +254,6 @@ class IRL(object):
             # final_reward = lt.final_state().reward()
             # if final_reward > 0:  # it should be better than any given state
             #     st = lt.states[random.choice(range(lt.step))]
-
 
         return ret
 
@@ -328,21 +324,6 @@ class NN(object):
         self.model.fit(data, labels, validation_split=0.2, epochs=self.epochs,
                        batch_size=self.batch_size)
 
-    def train_kfold(self, X, Y):
-        from sklearn.model_selection import StratifiedKFold
-        kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        cvscores = []
-        for train, test in kfold.split(X, Y):
-            # create model
-            model = self.build()
-            # Fit the model
-            model.fit(X[train], Y[train], epochs=150, batch_size=10, verbose=0)
-            # evaluate the model
-            scores = model.evaluate(X[test], Y[test], verbose=0)
-            print("%s: %.2f%%" % (model.metrics_names[0], scores[0]))
-            cvscores.append(scores[0])
-        print("%.2f%% (+/- %.2f%%)" % (np.mean(cvscores), np.std(cvscores)))
-
     def predict(self, data):
         return self.model.predict(data)
 
@@ -352,21 +333,16 @@ class NN(object):
 
 class Trace(object):
     """Trace: Trajectory with shape like (s_0, a_1, s_1, ..., a_n, s_n) """
-    def __init__(self, s0, state_list=None, action_list=None):
+    def __init__(self, s0: State, state_list=None, action_list=None):
         self.states = [s0]  # type: List[State]
-        self.actions = [(Action(0), Action(0))]  # placeholder for action[0]
+        # default value (placeholder) for action[0]
+        self.actions = [(Action(0), Action(0))]  # type: List[Tuple[Action, Action]]
         self.step = 0
         if state_list is not None and action_list is not None:
             assert len(state_list) == len(action_list)
             self.states += state_list
             self.actions += action_list
             self.step += len(state_list)
-
-    @classmethod
-    def from_trace(cls, traces, start_idx, end_idx):
-        states = traces.states[(start_idx-1):(end_idx+1)]
-        actions = traces.actions[start_idx:(end_idx+1)]
-        return cls(s0=states[0], state_list=states[1:], action_list=actions)
 
     def final_state(self) -> State:
         return self.states[-1]
@@ -395,6 +371,10 @@ class LoosedTrace(Trace):
         self._loose(simulator)
 
     def _loose(self, simulator: BaseSimulator):
+        """
+        Find some branching point and generate side chains
+        More info could be found by calling self.show()
+        """
         snap_idx = -1                              # terminal state's idx = -1
         snap_reward = self.final_state().reward()  # snapshot reward is final state's reward
         for t in reversed(range(self.step)):
@@ -421,7 +401,7 @@ class LoosedTrace(Trace):
                 self.side_chain.append(snap_trace)
                 snap_idx = len(self.side_chain) - 1
             else:
-                # the (a1, a2) = (0, 0) trace has been simulated
+                # the (a1, a2) = (0, 0) trace has been simulated, reuse it
                 snap_trace = simulated_trace
                 snap_idx = len(self.side_chain) - 1
             snap_reward = snap_trace[-1].reward()
@@ -448,9 +428,11 @@ class LoosedTrace(Trace):
                 print('[%03d] [%s] => ... => [%s] R=%d' % (k, textify(chain[0]), textify(chain[-1]), r))
 
     def split(self, view=0) -> List[Tuple[List[State], List[State]]]:
-        """ split pair od advance from trace
+        """
+        split pair at branching points on advance from trace,
+        this will use the results of _loose()
         view: 0 - all, 1 - player1 only, 2 - player2 only
-        :return List[Tuple[np.ndarray, np.ndarray]] means List[(good_trace, bad_trace)]
+        :return list of pairs of traces, i.e. List[(good_trace, bad_trace)]
         """
         ret = []
         t_hat = None
