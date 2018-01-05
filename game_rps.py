@@ -205,7 +205,7 @@ class RPSRandomPolicy(Policy):
 
 
 def test():
-    game = Game(RPSRandomPolicy(limit=3), RPSRandomPolicy(limit=3))
+    game = Game(RPSRandomPolicy(limit=10), RPSRandomPolicy(limit=10), max_step=25)
     simulator = RPSSimulator()
     game.reset()
     trace = game.start(simulator)

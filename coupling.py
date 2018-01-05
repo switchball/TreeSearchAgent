@@ -23,7 +23,7 @@ class Workflow(object):
         self.type_action = type(zero_action)
 
         # self.game = Game()
-        self.IRL = IRL(simulator, zero_action, gamma=0.5)
+        self.IRL = IRL(simulator, zero_action, gamma=0.9)
         input_dim = len(initial_state.feature_func())
         hidden_units = [128, 128, 32]
         batch_size = 16

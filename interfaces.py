@@ -159,13 +159,14 @@ class BaseSimulator(object):
 
 class Game(object):
     """Game: Provide basic two-player zero-sum logic"""
-    def __init__(self, policy1: Policy, policy2: Policy):
+    def __init__(self, policy1: Policy, policy2: Policy, max_step=100):
         self.policy1 = policy1
         self.policy2 = policy2
+        self.max_step = max_step
 
     def reset(self):
         self.t = 0
-        self.max_t = 25
+        self.max_t = self.max_step
         self.policy1.reset()
         self.policy2.reset()
         return self
@@ -214,7 +215,6 @@ class IRL(object):
         # class 0 means good (x-1), class 1 means bad (x+1)
         rs = list(chain(repeat(0, size // 2), repeat(1, size - size // 2)))
         random.shuffle(rs)
-        print(rs)
         self.X = [d * (2*r-1) for d, r in zip(self.data, rs)]
         self.y = rs
         return self.X, self.y
@@ -254,23 +254,44 @@ class IRL(object):
         return ret
 
     def _split_branch(self, trace, w) -> List[Tuple[State, np.ndarray, float]]:
+        """
+        To collect training data for NN.
+        The original idea is to collect all the branching point,
+        where the state diverges to two directions which have different results.
+        Specifically,
+            depending on different winner, it works in different manner.
+            Taking winner 1 as example, two traces are split depending on
+            whether player 1 plays the action or plays the zero action.
+        But it is not enough, the states along the way should also be collected.
+        Specifically,
+            each trace split in the above part has successors, and each of them
+            can be a training example.
+        """
+        def process(gamma, trace, winner, ret):
+            dis_features = [pow(gamma, k) * s.feature_func(view=winner)
+                            * (1.0 / (1 - gamma) if k == len(trace) - 1 else 1)
+                            for k, s in enumerate(trace)]
+            mu = sum(dis_features)
+            r = np.dot(mu, w)
+            ret.append((trace[0], trace[0].feature_func(view=winner), r))
+
         ret = []
         lt = LoosedTrace(trace, self.bs)
         for winner in (1, 2):  # enumerate the winner in player1 and player2
             split_trace_arr = lt.split(view=winner)
             for good_trace, weak_trace in split_trace_arr:
-                good_dis_fea = [pow(self.gamma, k) * s.feature_func(view=winner)
-                                * (1.0/(1-self.gamma) if k == len(good_trace) - 1 else 1)
-                                for k, s in enumerate(good_trace)]
-                weak_dis_fea = [pow(self.gamma, k) * s.feature_func(view=winner)
-                                * (1.0 / (1 - self.gamma) if k == len(weak_trace) - 1 else 1)
-                                for k, s in enumerate(weak_trace)]
-                mu_good = sum(good_dis_fea)
-                mu_weak = sum(weak_dis_fea)
-                r_good = np.dot(mu_good, w)
-                r_weak = np.dot(mu_weak, w)
-                ret.append((good_trace[0], good_trace[0].feature_func(view=winner), r_good))
-                ret.append((weak_trace[0], weak_trace[0].feature_func(view=winner), r_weak))
+                # TODO refactor done, and process(...) method can be optimized
+                process(self.gamma, good_trace, winner, ret)
+                process(self.gamma, weak_trace, winner, ret)
+                if good_trace[-1].terminateQ() or good_trace[-1].stableQ():
+                    length = len(good_trace)
+                    for m in range(1, length - 1):
+                        process(self.gamma, good_trace[m:], winner, ret)
+                if weak_trace[-1].terminateQ() or weak_trace[-1].stableQ():
+                    length = len(weak_trace)
+                    for m in range(1, length - 1):
+                        process(self.gamma, weak_trace[m:], winner, ret)
+
         return ret
 
 
