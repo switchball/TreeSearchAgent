@@ -39,7 +39,7 @@ class Workflow(object):
             'state': self.type_state,
             'action': self.type_action,
             'repeat': self._repeat_game_with_policy,
-            'train': lambda traces: self._train_nn(traces, self._train_feature_weight_with_traces(traces)),
+            'train!': lambda traces: self._train_nn(traces, self._train_feature_weight_with_traces(traces)),
             'explore': Exploration,
             'random_policy': Exploration(ZeroPolicy(self.type_action), epsilon=1),
             'tree_search_policy': BaseTreeSearch(self.type_action, self.simulator, self.NN),
@@ -51,6 +51,7 @@ class Workflow(object):
         eval(parse(cmd), env=self.global_env)
 
     def flow(self, _policy1, _policy2):
+        """ this method is deprecated and preserved for debug use. """
         traces = self._repeat_game_with_policy(100, _policy1, _policy2)
         w = self._train_feature_weight_with_traces(traces)
 
@@ -129,7 +130,7 @@ class Workflow(object):
         return param
 
     def _train_nn(self, traces, weight):
-        # TODO what is the training data of nn
+        # get the training data of nn
         dd = [self.IRL._split_branch(trace, weight) for trace in traces]
         dd = [item for sublist in dd for item in sublist]
         data = [(sf, r) for s, sf, r in dd]

@@ -151,4 +151,4 @@ def schemestr(exp):
         return str(exp)
 
 # program = "(begin (define r 10) (* pi (* r r)))"
-# tokenize(program)
+# eval(read_from_tokens(tokenize(program)))

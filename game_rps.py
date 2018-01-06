@@ -11,6 +11,7 @@ The game of Rock Paper Scissors
 
 from interfaces import *
 from tree_search import *
+import keyboard  # Using module keyboard
 
 
 class RPSState(State):
@@ -225,13 +226,11 @@ class HandRPSPolicy(Policy):
         return RPSAction(a)
 
 
-import keyboard  # Using module keyboard
 class InteractiveRPSPolicy(Policy):
     def __init__(self):
         super(InteractiveRPSPolicy, self).__init__(RPSAction)
 
     def action(self, state: State, player=1):
-        a = None
         print('==> %s  \t R > S > P' % state)
         while True:  # making a loop
             try:  # used try so that if user pressed other than the given key error will not be shown
@@ -246,13 +245,14 @@ class InteractiveRPSPolicy(Policy):
                     break
                 elif keyboard.is_pressed('0'):
                     a = 0
-                    pass
+                    break
             except:
                 print('1 - Rock, 2 - Scissors, 3 - Paper ')
                 pass  # if user pressed other than the given key the loop will break
 
         keyboard.stash_state()  # remove the key press state
         return RPSAction(a)
+
 
 def test():
     game = Game(RPSRandomPolicy(limit=10), RPSRandomPolicy(limit=10), max_step=25)
@@ -280,11 +280,14 @@ if __name__ == '__main__':
     wf = Workflow(RPSSimulator(), RPSState, RPSAction, test_policy=itp)
     # wf.flow(RPSRandomPolicy(limit=3), RPSRandomPolicy(limit=3))
     wf.command('(define traces0 (repeat 100 random_policy random_policy))')
-    wf.command('(train traces0)')    # train will effect NN => tree_search_policy, not pure module
+    wf.command('(train! traces0)')    # train will effect NN => tree_search_policy, not pure module
     wf.command('(define policy_v01 tree_search_policy)')
     wf.command('(repeat 100 policy_v01 random_policy)')
     wf.command('(define traces1 (repeat  50 policy_v01 (explore policy_v01 0.3)))')
-    wf.command('(train traces1)')
+    wf.command('(train! traces1)')
     wf.command('(define policy_v02 tree_search_policy)')
     wf.command('(define traces2 (repeat 100 policy_v02 (explore policy_v02 0.3)))')
+
+    # enable this line will start the game play against human input
+    # wf.command('(repeat 1 policy_v02 test_policy)')
 

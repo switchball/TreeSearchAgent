@@ -1,16 +1,14 @@
 #!/user/bin/env python
 # -*- coding: utf-8 -*-
 #
-# The interfaces of ???
+# The interfaces of TreeSearchAgent
 
 from keras.models import Sequential
 from keras.layers import Dense
 from sklearn.svm import LinearSVC
-from sklearn.cross_validation import train_test_split
 import numpy as np
 import random
 from itertools import repeat, chain
-from functools import reduce
 from typing import List, Tuple, Type, Optional
 
 
@@ -171,10 +169,10 @@ class Game(object):
         self.policy1 = policy1
         self.policy2 = policy2
         self.max_step = max_step
+        self.t = 0
 
     def reset(self):
         self.t = 0
-        self.max_t = self.max_step
         self.policy1.reset()
         self.policy2.reset()
         return self
@@ -188,7 +186,7 @@ class Game(object):
         st = simulator.initial_state()  # type: State
         trace = Trace(st)
         t = 0
-        while t < self.max_t and not st.terminateQ():
+        while t < self.max_step and not st.terminateQ():
             action1 = self.policy1.action(st, player=1)
             action2 = self.policy2.action(st, player=2)
             s = simulator._step_env(st)
@@ -271,13 +269,13 @@ class IRL(object):
             each trace split in the above part has successors, and each of them
             can be a training example.
         """
-        def process(gamma, trace, winner, ret):
-            dis_features = [pow(gamma, k) * s.feature_func(view=winner)
-                            * (1.0 / (1 - gamma) if k == len(trace) - 1 else 1)
-                            for k, s in enumerate(trace)]
+        def process(gamma, trace_, winner_, ret_):
+            dis_features = [pow(gamma, k) * s.feature_func(view=winner_)
+                            * (1.0 / (1 - gamma) if k == len(trace_) - 1 else 1)
+                            for k, s in enumerate(trace_)]
             mu = sum(dis_features)
             r = np.dot(mu, w)
-            ret.append((trace[0], trace[0].feature_func(view=winner), r))
+            ret_.append((trace_[0], trace_[0].feature_func(view=winner_), r))
 
         ret = []
         lt = LoosedTrace(trace, self.bs)
@@ -327,8 +325,8 @@ class NN(object):
     def predict(self, data):
         return self.model.predict(data)
 
-    def predict_one(self, input: np.ndarray) -> float:
-        return self.predict(input.reshape(1, -1))[0, 0]
+    def predict_one(self, input_feature: np.ndarray) -> float:
+        return self.predict(input_feature.reshape(1, -1))[0, 0]
 
 
 class Trace(object):
