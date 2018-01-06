@@ -277,5 +277,14 @@ if __name__ == '__main__':
     from coupling import Workflow
     tp = Exploration(HandRPSPolicy(), epsilon=0.1)
     itp = InteractiveRPSPolicy()
-    wf = Workflow(RPSSimulator(), RPSState.get_initial_state(), RPSAction(0), test_policy=itp)
-    wf.flow(RPSRandomPolicy(limit=3), RPSRandomPolicy(limit=3))
+    wf = Workflow(RPSSimulator(), RPSState, RPSAction, test_policy=itp)
+    # wf.flow(RPSRandomPolicy(limit=3), RPSRandomPolicy(limit=3))
+    wf.command('(define traces0 (repeat 100 random_policy random_policy))')
+    wf.command('(train traces0)')    # train will effect NN => tree_search_policy, not pure module
+    wf.command('(define policy_v01 tree_search_policy)')
+    wf.command('(repeat 100 policy_v01 random_policy)')
+    wf.command('(define traces1 (repeat  50 policy_v01 (explore policy_v01 0.3)))')
+    wf.command('(train traces1)')
+    wf.command('(define policy_v02 tree_search_policy)')
+    wf.command('(define traces2 (repeat 100 policy_v02 (explore policy_v02 0.3)))')
+

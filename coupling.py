@@ -12,28 +12,43 @@ import time
 import logging
 from interfaces import *
 from tree_search import *
+from lispy import standard_env, eval, parse
 
 class Workflow(object):
     """Workflow: Put things together"""
-    def __init__(self, simulator: BaseSimulator, initial_state: State, zero_action: Action, test_policy=None):
+    def __init__(self, simulator: BaseSimulator, s: Type[State], a: Type[Action], test_policy=None):
         self.logger = logging.getLogger()
         self.simulator = simulator
-        self.initial_state = initial_state
-        self.zero_action = zero_action
-        self.type_state = type(initial_state)
-        self.type_action = type(zero_action)
+        self.initial_state = s.get_initial_state()
+        self.zero_action = a(0)
+        self.type_state = s
+        self.type_action = a
         self.test_policy = test_policy
 
         # self.game = Game()
-        self.IRL = IRL(simulator, zero_action, gamma=0.9)
-        input_dim = len(initial_state.feature_func())
+        self.IRL = IRL(simulator, self.zero_action, gamma=0.9)
+        input_dim = len(self.initial_state.feature_func())
         hidden_units = [128, 128, 32]
         batch_size = 16
         epochs = 4
         self.NN = NN(input_dim, hidden_units, batch_size, epochs)
 
-    def command(self):
-        pass
+        # scheme env
+        self.global_env = standard_env()
+        self.global_env.update({
+            'state': self.type_state,
+            'action': self.type_action,
+            'repeat': self._repeat_game_with_policy,
+            'train': lambda traces: self._train_nn(traces, self._train_feature_weight_with_traces(traces)),
+            'explore': Exploration,
+            'random_policy': Exploration(ZeroPolicy(self.type_action), epsilon=1),
+            'tree_search_policy': BaseTreeSearch(self.type_action, self.simulator, self.NN),
+            'test_policy': self.test_policy,
+        })
+
+    def command(self, cmd: str):
+        print('Executing:', cmd)
+        eval(parse(cmd), env=self.global_env)
 
     def flow(self, _policy1, _policy2):
         traces = self._repeat_game_with_policy(100, _policy1, _policy2)
