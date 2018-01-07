@@ -139,7 +139,7 @@ class BaseSimulator(object):
         s = self._step_env(state, copy=True)
         return self._step_act(s, a1, a2, copy=False)
 
-    def next_empty_some(self, state, f=lambda s: s.stableQ() or s.terminateQ(), max_t=100):
+    def next_empty_some(self, state, f=lambda s: s.stableQ() or s.terminateQ(), max_t=100) -> List[State]:
         s = state
         ss = []
         for i in range(max_t):
@@ -149,7 +149,7 @@ class BaseSimulator(object):
                 break
         return ss
 
-    def next_action_some(self, state, actions, f=lambda s: s.stableQ() or s.terminateQ(), max_t=100):
+    def next_action_some(self, state, actions, f=lambda s: s.stableQ() or s.terminateQ(), max_t=100) -> List[State]:
         a1, a2 = actions
         s = state
         ss = []
@@ -268,6 +268,8 @@ class IRL(object):
         Specifically,
             each trace split in the above part has successors, and each of them
             can be a training example.
+        Also, the terminal state is VERY important.
+            So each ending state of trace branch is used.
         """
         def process(gamma, trace_, winner_, ret_):
             dis_features = [pow(gamma, k) * s.feature_func(view=winner_)
@@ -279,20 +281,33 @@ class IRL(object):
 
         ret = []
         lt = LoosedTrace(trace, self.bs)
+        actual_trace = lt.states
+        #reward = lt.final_state().reward()
+        #winner = 1 if reward > 0 else 2 if reward < 0 else 0
+        #if winner > 0 and (actual_trace[-1].terminateQ() or actual_trace[-1].stableQ()):
+        #    length = len(actual_trace)
+        #    for m in range(1, length - 1):
+        #        process(self.gamma, actual_trace[m:], winner, ret)
         for winner in (1, 2):  # enumerate the winner in player1 and player2
             split_trace_arr = lt.split(view=winner)
             for good_trace, weak_trace in split_trace_arr:
                 # TODO refactor done, and process(...) method can be optimized
                 process(self.gamma, good_trace, winner, ret)
                 process(self.gamma, weak_trace, winner, ret)
-                if good_trace[-1].terminateQ() or good_trace[-1].stableQ():
-                    length = len(good_trace)
-                    for m in range(1, length - 1):
-                        process(self.gamma, good_trace[m:], winner, ret)
-                if weak_trace[-1].terminateQ() or weak_trace[-1].stableQ():
-                    length = len(weak_trace)
-                    for m in range(1, length - 1):
-                        process(self.gamma, weak_trace[m:], winner, ret)
+                #if good_trace[-1].terminateQ() or good_trace[-1].stableQ():
+                #    length = len(good_trace)
+                #    for m in range(1, length - 1):
+                #        process(self.gamma, good_trace[m:], winner, ret)
+                #if weak_trace[-1].terminateQ() or weak_trace[-1].stableQ():
+                #    length = len(weak_trace)
+                #    for m in range(1, length - 1):
+                #        process(self.gamma, weak_trace[m:], winner, ret)
+        # process terminal state of each side chain
+        for chain in random.sample(lt.side_chain, k=0):
+            winner = 1 if chain[-1].reward() > 0 \
+                else 2 if chain[-1].reward() < 0 else 0
+            if winner > 0:
+                process(self.gamma, [chain[-1]], winner, ret)
 
         return ret
 
@@ -327,6 +342,13 @@ class NN(object):
 
     def predict_one(self, input_feature: np.ndarray) -> float:
         return self.predict(input_feature.reshape(1, -1))[0, 0]
+
+    def save(self, name='model.h5'):
+        self.model.save_weights(name)
+
+    def load(self, name='model.h5'):
+        self.model.load_weights(name)
+
 
 
 class Trace(object):
@@ -365,7 +387,7 @@ class LoosedTrace(Trace):
         self.zero_1 = [None] * self.step  # simulated zero-act for player 1
         self.zero_2 = [None] * self.step  # simulated zero-act for player 2
         self.real_act = [None] * self.step  # (mixed simulated) real-act
-        self.side_chain = []  # contains simulated trace (but with no actions)
+        self.side_chain = []  # type: List[List[State]] # contains simulated trace (but with no actions)
         self._loose(simulator)
 
     def _loose(self, simulator: BaseSimulator):
@@ -407,7 +429,8 @@ class LoosedTrace(Trace):
     def show(self, w=None, nn=None):
         textify = lambda s: s.visual(w, nn)
         for k, s in enumerate(self.states):
-            str_s = textify(s)
+            a1, a2 = self.actions[k]
+            str_s = str(a1) + textify(s) + str(a2)
             if k == 0:
                 print('%03d: %s\t\tzero_L\t\tzero_R\t\treal_act' % (k, str_s))
             elif k == len(self.states) - 1:

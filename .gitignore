@@ -100,3 +100,12 @@ ENV/
 
 # PyCharm
 .idea/
+
+# Documents
+doc/*.docx
+
+# Models
+model.h5
+
+# Others
+aaa.py

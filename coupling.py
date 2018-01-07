@@ -8,6 +8,9 @@ File coupling.py created on 20:47 2018/1/1
 @version: 1.0
 """
 
+import matplotlib.cm
+import matplotlib.pyplot as plt
+from scipy.stats import gaussian_kde
 import time
 import logging
 from interfaces import *
@@ -19,6 +22,7 @@ class Workflow(object):
     def __init__(self, simulator: BaseSimulator, s: Type[State], a: Type[Action], test_policy=None):
         self.logger = logging.getLogger()
         self.simulator = simulator
+        self.game_simulator = type(simulator)()
         self.initial_state = s.get_initial_state()
         self.zero_action = a(0)
         self.type_state = s
@@ -26,9 +30,9 @@ class Workflow(object):
         self.test_policy = test_policy
 
         # self.game = Game()
-        self.IRL = IRL(simulator, self.zero_action, gamma=0.9)
+        self.IRL = IRL(simulator, self.zero_action, gamma=0.95)
         input_dim = len(self.initial_state.feature_func())
-        hidden_units = [128, 128, 32]
+        hidden_units = [64, 128, 128, 128]
         batch_size = 16
         epochs = 4
         self.NN = NN(input_dim, hidden_units, batch_size, epochs)
@@ -40,15 +44,26 @@ class Workflow(object):
             'action': self.type_action,
             'repeat': self._repeat_game_with_policy,
             'train!': lambda traces: self._train_nn(traces, self._train_feature_weight_with_traces(traces)),
+            'save_model!': lambda : self.NN.save(),
+            'load_model!': lambda : self.NN.load(),
             'explore': Exploration,
             'random_policy': Exploration(ZeroPolicy(self.type_action), epsilon=1),
             'tree_search_policy': BaseTreeSearch(self.type_action, self.simulator, self.NN),
             'test_policy': self.test_policy,
+            'get_weight': lambda : self.IRL.coef,
+            'draw': self._draw
         })
 
     def command(self, cmd: str):
         print('Executing:', cmd)
-        eval(parse(cmd), env=self.global_env)
+        result = eval(parse(cmd), env=self.global_env)
+        if result is not None:
+            if isinstance(result, int) or isinstance(result, float):
+                print('Result:', result)
+            else:
+                print('Result:', type(result))
+                print(result)
+        return result
 
     def flow(self, _policy1, _policy2):
         """ this method is deprecated and preserved for debug use. """
@@ -95,19 +110,20 @@ class Workflow(object):
 
     def _repeat_game_with_policy(self, n, policy1, policy2):
         self.game = Game(policy1, policy2)
-        self.simulator.reset_cnt()
+        self.game_simulator.reset_cnt()
         total, win, tie, lose = 0, 0, 0, 0
         traces = []
         lose_idx = []
         ts = time.time()
         for e in range(n):
             self.game.reset()
-            trace = self.game.start(self.simulator)
+            trace = self.game.start(self.game_simulator)
             reward = trace.final_state().reward()
             total += 1
             win += 1 if reward > 0 else 0
             tie += 1 if reward == 0 else 0
             lose += 1 if reward < 0 else 0
+            self.game_simulator.update_score(win,tie,lose)
             if reward < 0:
                 lose_idx.append(e)
             traces.append(trace)
@@ -146,6 +162,44 @@ class Workflow(object):
         y_pred = np.ravel(self.NN.predict(X))
         self.y = y
         self.y_pred = y_pred
+
+        # Calculate the point density
+        xy = np.vstack([y, y_pred])
+        z0 = gaussian_kde(xy)(xy)
+
+        # Sort the points by density, so that the densest points are plotted last
+        idx = z0.argsort()
+        x0, y0, z0 = y[idx], y_pred[idx], z0[idx]
+
+        fig, ax = plt.subplots()
+        ax.scatter(x0, y0, c=z0, s=50, edgecolor='')
+        plt.axis('equal')
+        plt.show()
+
+    def _draw(self, trace, weight):
+        """ Input trace, use NN to predict result"""
+        LoosedTrace(trace, self.simulator).show(weight, self.NN)
+
+        dd = self.IRL._split_branch(trace, weight)
+        data = [(sf, r) for s, sf, r in dd]
+        X, y = [list(t) for t in zip(*data)]
+        X = np.array(X)
+        y = np.array(y).transpose()
+        y_pred = np.ravel(self.NN.predict(X))
+
+        # Calculate the point density
+        xy = np.vstack([y, y_pred])
+        z0 = gaussian_kde(xy)(xy)
+
+        # Sort the points by density, so that the densest points are plotted last
+        idx = z0.argsort()
+        x0, y0, z0 = y[idx], y_pred[idx], z0[idx]
+
+        fig, ax = plt.subplots()
+        ax.scatter(x0, y0, c=z0, s=50, edgecolor='')
+        plt.axis('equal')
+        plt.show()
+
 
     def _judge_policy(self, policy_to_be_judged, tag='', n=100):
         if self.test_policy is None:
