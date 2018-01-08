@@ -44,3 +44,64 @@ class BaseTreeSearch(Policy):
         # minimize on opponent's choice, maximize on player's choice
         k = np.argmax(np.min(vs, axis=1))
         return action_space[k]
+
+
+class MinimaxSearch(Policy):
+    def __init__(self, action_type, simulator: BaseSimulator, nn: NN, ignore_opponent=True):
+        super(MinimaxSearch, self).__init__(action_type)
+        self.simulator = simulator
+        self.NN = nn
+        self.action_space = self.action_type.get_action_spaces()
+        self.ignore_opponent = ignore_opponent
+
+    def action(self, state, player=1):
+        """
+        In the implementation, the agent will use minimax search on given depth
+        """
+        value = self.NN.predict_one(state.feature_func(view=player))
+        if value >= 0:
+            v, idx = self.minimax(state, 1*2, True, player)
+        elif value >= -1:
+            v, idx = self.minimax(state, 2*2, True, player)
+        elif value >= -2:
+            v, idx = self.minimax(state, 3*2, True, player)
+        else:
+            v, idx = self.minimax(state, 4*2, True, player)
+        return self.action_space[idx]
+
+    def minimax(self, state, depth, maximizing, player):
+        idx = -1
+        if depth == 0 or state.terminateQ():
+            return state.score_by(self.NN, view=player), idx
+        if maximizing:  # maximizing player
+            v = float('-inf')
+            s_ = self.simulator._step_env(state, copy=True)
+            if player == 1:
+                children = [self.simulator.next1(s_, a, copy=True) for a in self.action_space]
+            else:
+                children = [self.simulator.next2(s_, a, copy=True) for a in self.action_space]
+            for k, child in enumerate(children):
+                _v, _idx = self.minimax(child, depth - 1, False, player)
+                if _v > v:
+                    idx = k
+                    v = _v
+                # v = max(v, _v)
+                # alpha = max(alpha, v)
+            return v, idx
+        else:           # minimizing player
+            v = float('inf')
+            s_ = state  # do not need to call simulator._step_env again !!  # name alias
+            if self.ignore_opponent:
+                children = [s_]  # as if call next with zero action
+            elif player == 1:
+                children = [self.simulator.next2(s_, a, copy=True) for a in self.action_space]
+            else:
+                children = [self.simulator.next1(s_, a, copy=True) for a in self.action_space]
+            for k, child in enumerate(children):
+                _v, _idx = self.minimax(child, depth - 1, True, player)
+                if _v < v:
+                    idx = k
+                    v = _v
+                # v = min(v, _v)
+                # beta = min(beta, v)
+            return v, idx

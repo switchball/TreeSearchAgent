@@ -19,7 +19,7 @@ from lispy import standard_env, eval, parse
 
 class Workflow(object):
     """Workflow: Put things together"""
-    def __init__(self, simulator: BaseSimulator, s: Type[State], a: Type[Action], test_policy=None):
+    def __init__(self, simulator: BaseSimulator, s: Type[State], a: Type[Action], test_policy=None, gamma=0.99):
         self.logger = logging.getLogger()
         self.simulator = simulator
         self.game_simulator = type(simulator)()
@@ -30,9 +30,9 @@ class Workflow(object):
         self.test_policy = test_policy
 
         # self.game = Game()
-        self.IRL = IRL(simulator, self.zero_action, gamma=0.95)
+        self.IRL = IRL(simulator, self.zero_action, gamma=gamma)
         input_dim = len(self.initial_state.feature_func())
-        hidden_units = [64, 128, 128, 128]
+        hidden_units = [64, 128, 128]
         batch_size = 16
         epochs = 4
         self.NN = NN(input_dim, hidden_units, batch_size, epochs)
@@ -48,7 +48,7 @@ class Workflow(object):
             'load_model!': lambda : self.NN.load(),
             'explore': Exploration,
             'random_policy': Exploration(ZeroPolicy(self.type_action), epsilon=1),
-            'tree_search_policy': BaseTreeSearch(self.type_action, self.simulator, self.NN),
+            'tree_search_policy': MinimaxSearch(self.type_action, self.simulator, self.NN),
             'test_policy': self.test_policy,
             'get_weight': lambda : self.IRL.coef,
             'draw': self._draw
@@ -109,7 +109,7 @@ class Workflow(object):
         # hint: LoosedTrace(traces[2], wf.simulator).show(wf.IRL.coef, wf.NN)
 
     def _repeat_game_with_policy(self, n, policy1, policy2):
-        self.game = Game(policy1, policy2)
+        self.game = Game(policy1, policy2, max_step=1000)
         self.game_simulator.reset_cnt()
         total, win, tie, lose = 0, 0, 0, 0
         traces = []
@@ -123,7 +123,8 @@ class Workflow(object):
             win += 1 if reward > 0 else 0
             tie += 1 if reward == 0 else 0
             lose += 1 if reward < 0 else 0
-            self.game_simulator.update_score(win,tie,lose)
+            if 'update_score' in dir(self.game_simulator):
+                self.game_simulator.update_score(win,tie,lose)
             if reward < 0:
                 lose_idx.append(e)
             traces.append(trace)
@@ -147,16 +148,29 @@ class Workflow(object):
 
     def _train_nn(self, traces, weight):
         # get the training data of nn
-        dd = [self.IRL._split_branch(trace, weight) for trace in traces]
-        dd = [item for sublist in dd for item in sublist]
-        data = [(sf, r) for s, sf, r in dd]
+        # For computation efficiency, process traces as LoosedTrace first
+        lt_traces = [LoosedTrace(trace, self.simulator) for trace in traces]
+        dd1 = [self.IRL._split_branch(trace, weight) for trace in lt_traces]
+        if self.NN.ready():
+            from collections import Counter
+            cnt = Counter()
+            traces_s = [trace.fix_auto(self.simulator, self.NN, target=1, arg=cnt) for trace in lt_traces]
+            fixed_traces = [item for sublist in traces_s for item in sublist]  # type: List[List[State]] # flatten array
+            dd2 = [self.IRL.process_trace_to_vector(trace, winner=1) for trace in fixed_traces]
+            print('Find %d fixed traces [in coupling.py - Line 158]' % len(fixed_traces))
+            print(cnt.most_common())
+        else:
+            dd2 = []
+        dd = [item for sublist in (dd1 + dd2) for item in sublist]  # type: List[Tuple[State, np.ndarray, float]]
+        data = [(sf, r) for s, sf, r in dd]                         # type: List[Tuple[np.ndarray, float]]
         size = len(data)
+        print('Total %d training data [in coupling.py - Line 164]' % size)
 
         X, y = [list(t) for t in zip(*data)]
         X = np.array(X)
         y = np.array(y).transpose()
 
-        self.NN.build()
+        self.NN.model = self.NN.build()
         self.NN.train(X, y)
 
         y_pred = np.ravel(self.NN.predict(X))

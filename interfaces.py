@@ -3,6 +3,7 @@
 #
 # The interfaces of TreeSearchAgent
 
+import keras
 from keras.models import Sequential
 from keras.layers import Dense
 from sklearn.svm import LinearSVC
@@ -16,6 +17,8 @@ class State(object):
     """State: Abstract class for game state representation"""
     def __init__(self, s):
         self.s = s
+        self.cached_nn_score_1 = None
+        self.cached_nn_score_2 = None
 
     @staticmethod
     def get_initial_state():
@@ -46,6 +49,30 @@ class State(object):
     def reward(self) -> int:
         raise NotImplementedError
 
+    def score_by(self, nn, view, use_cached_value=True) -> float:
+        """
+        Cached function of neural network score.
+        :param nn: NN neural network
+        :param use_cached_value: if True, the value will be cached
+        :return: float the value estimated by neural network
+        """
+        # TODO need some refactor work
+        if view == 1:
+            if self.cached_nn_score_1 is not None and use_cached_value:
+                return self.cached_nn_score_1
+            else:
+                self.cached_nn_score_1 = nn.predict_one(self.feature_func(view=view))
+                return self.cached_nn_score_1
+        elif view == 2:
+            if self.cached_nn_score_2 is not None and use_cached_value:
+                return self.cached_nn_score_2
+            else:
+                self.cached_nn_score_2 = nn.predict_one(self.feature_func(view=view))
+                return self.cached_nn_score_2
+        else:
+            assert view in (1, 2), 'view should be 1 or 2'
+            return 0
+
     def dump_to_json(self):
         pass
 
@@ -62,11 +89,14 @@ class Action(object):
         self.a = a
 
     @staticmethod
-    def get_action_spaces():
-        pass
+    def get_action_spaces() -> list:
+        raise NotImplementedError
 
     def zeroQ(self) -> bool:
         return self.a == 0
+
+    def __eq__(self, other):
+        return self.a == other.a
 
 
 class Policy(object):
@@ -240,10 +270,10 @@ class IRL(object):
             split_trace_arr = lt.split(view=winner)
             for good_trace, weak_trace in split_trace_arr:
                 good_dis_fea = [pow(self.gamma, k) * s.feature_func(view=winner)
-                                * (1.0/(1-self.gamma) if k == len(good_trace) - 1 else 1)
+                                * (1.0 / (1 - self.gamma) if k == len(good_trace) - 1 and s.stableQ() else 1)
                                 for k, s in enumerate(good_trace)]
                 weak_dis_fea = [pow(self.gamma, k) * s.feature_func(view=winner)
-                                * (1.0 / (1 - self.gamma) if k == len(weak_trace) - 1 else 1)
+                                * (1.0 / (1 - self.gamma) if k == len(weak_trace) - 1 and s.stableQ() else 1)
                                 for k, s in enumerate(weak_trace)]
                 mu_good = sum(good_dis_fea)
                 mu_weak = sum(weak_dis_fea)
@@ -253,6 +283,22 @@ class IRL(object):
             # if final_reward > 0:  # it should be better than any given state
             #     st = lt.states[random.choice(range(lt.step))]
 
+        return ret
+
+    def process_trace_to_vector(self, trace: List[State], winner: int) -> List[Tuple[State, np.ndarray, float]]:
+        ret = []
+        gamma = self.gamma
+        dis_features = [pow(gamma, k) * s.feature_func(view=winner)
+                        * (1.0 / (1 - gamma) if k == len(trace) - 1 and s.stableQ() else 1)
+                        for k, s in enumerate(trace)]
+        mu = sum(dis_features)
+        r = np.dot(mu, self.coef)
+        dis_feature2 = [pow(gamma, k) * s.feature_func(view=3-winner)
+                        * (1.0 / (1 - gamma) if k == len(trace) - 1 and s.stableQ() else 1)
+                        for k, s in enumerate(trace)]
+        r2 = np.dot(sum(dis_feature2), self.coef)
+        ret.append((trace[0], trace[0].feature_func(view=winner), r))
+        ret.append((trace[0], trace[0].feature_func(view=3-winner), r2))
         return ret
 
     def _split_branch(self, trace, w) -> List[Tuple[State, np.ndarray, float]]:
@@ -271,17 +317,13 @@ class IRL(object):
         Also, the terminal state is VERY important.
             So each ending state of trace branch is used.
         """
-        def process(gamma, trace_, winner_, ret_):
-            dis_features = [pow(gamma, k) * s.feature_func(view=winner_)
-                            * (1.0 / (1 - gamma) if k == len(trace_) - 1 else 1)
-                            for k, s in enumerate(trace_)]
-            mu = sum(dis_features)
-            r = np.dot(mu, w)
-            ret_.append((trace_[0], trace_[0].feature_func(view=winner_), r))
 
         ret = []
-        lt = LoosedTrace(trace, self.bs)
-        actual_trace = lt.states
+        if not isinstance(trace, LoosedTrace):
+            lt = LoosedTrace(trace, self.bs)
+        else:
+            lt = trace
+        #actual_trace = lt.states
         #reward = lt.final_state().reward()
         #winner = 1 if reward > 0 else 2 if reward < 0 else 0
         #if winner > 0 and (actual_trace[-1].terminateQ() or actual_trace[-1].stableQ()):
@@ -291,9 +333,8 @@ class IRL(object):
         for winner in (1, 2):  # enumerate the winner in player1 and player2
             split_trace_arr = lt.split(view=winner)
             for good_trace, weak_trace in split_trace_arr:
-                # TODO refactor done, and process(...) method can be optimized
-                process(self.gamma, good_trace, winner, ret)
-                process(self.gamma, weak_trace, winner, ret)
+                ret += self.process_trace_to_vector(good_trace, winner)
+                ret += self.process_trace_to_vector(weak_trace, winner)
                 #if good_trace[-1].terminateQ() or good_trace[-1].stableQ():
                 #    length = len(good_trace)
                 #    for m in range(1, length - 1):
@@ -303,11 +344,15 @@ class IRL(object):
                 #    for m in range(1, length - 1):
                 #        process(self.gamma, weak_trace[m:], winner, ret)
         # process terminal state of each side chain
-        for chain in random.sample(lt.side_chain, k=0):
+        for chain in random.sample(lt.side_chain, k=1):
             winner = 1 if chain[-1].reward() > 0 \
                 else 2 if chain[-1].reward() < 0 else 0
             if winner > 0:
-                process(self.gamma, [chain[-1]], winner, ret)
+                ret += self.process_trace_to_vector([chain[-1]], winner)
+
+        # fix at the tail of trace
+        # Note: it is moved to coupling.py since lt.fix(...) depends on neural network
+        # fix_results = lt.fix(...)
 
         return ret
 
@@ -321,6 +366,7 @@ class NN(object):
         self.model = self.build()
         self.batch_size = batch_size
         self.epochs = epochs
+        self._ready = False
 
     def build(self):
         model = Sequential()
@@ -330,12 +376,14 @@ class NN(object):
         for n in hs[1:]:
             model.add(Dense(n, activation='relu'))  # hidden layers
         model.add(Dense(self.output_dim))  # output value with no activation
-        model.compile(loss='mean_squared_error', optimizer='adam')
+        adam = keras.optimizers.Adam(lr=5e-4)
+        model.compile(loss='mean_squared_error', optimizer=adam)
         return model
 
     def train(self, data, labels):
         self.model.fit(data, labels, validation_split=0.2, epochs=self.epochs,
                        batch_size=self.batch_size)
+        self._ready = True
 
     def predict(self, data):
         return self.model.predict(data)
@@ -348,6 +396,11 @@ class NN(object):
 
     def load(self, name='model.h5'):
         self.model.load_weights(name)
+        self._ready = True
+
+    def ready(self):
+        """ Whether the network is ready to predict """
+        return self._ready
 
 
 
@@ -477,4 +530,61 @@ class LoosedTrace(Trace):
                         trace_2 = self.side_chain[idx_2]
                         ret.append((trace_real, trace_2))
                 t_hat = t  # record branching point as t_hat
+        return ret
+
+    def fix_auto(self, simulator: BaseSimulator, nn: NN, target=0, arg:dict=None) -> List[List[State]]:
+        """
+        An wrapper for fix, auto determine the view as win state do not need to fix
+        :param target which agent to consider: 0 - all, 1 - player1 only, 2 - player2 only
+        """
+        reward = self.final_state().reward()
+        if reward > 0 and target in (0, 2):
+            # player 1 win, should fix as view = 2 => target contains 2
+            return self.fix(simulator, nn, view=2, arg=arg)
+        elif reward < 0 and target in (0, 1):
+            # player 2 win, should fix as view = 1 => target contains 1
+            return self.fix(simulator, nn, view=1, arg=arg)
+        else:
+            # tie, do not consider this case here.
+            return []
+
+    def fix(self, simulator: BaseSimulator, nn: NN, view=1, arg:dict=None) -> List[List[State]]:
+        reward = self.final_state().reward()
+        if reward > 0:
+            return []   # It is meaningless to fix win state, except it has magnitude. (we do not consider it here)
+        ret = []
+        flag = False
+        depth = 16
+        at = type(self.actions[-1][0])  # type: Type[Action]
+        action_space = at.get_action_spaces()
+        assert view in (1, 2), 'view should be 1 or 2'
+        for t in reversed(range(max(self.step - depth, 0), self.step)):
+            st = self.states[t]
+            a1, a2 = self.actions[t + 1]
+            if view == 1:
+                next_states = [simulator.next(st, a, a2) for a in action_space]
+                picked_act = a1
+            else:
+                next_states = [simulator.next(st, a1, a) for a in action_space]
+                picked_act = a2
+            picked_act_idx = [k for k, a in enumerate(action_space) if a == picked_act][0]
+            scores = np.ravel(nn.predict(np.array([s.feature_func(view) for s in next_states])))
+            if np.max(scores) != scores[picked_act_idx]:
+                print('Mismatch! scores=%s, act_idx=%d' % (scores, picked_act_idx))
+                print('State:', st, 'with', st.s)
+            # enumerate flip actions
+            for flip_act in action_space:
+                if flip_act == picked_act:
+                    continue
+                actions = (flip_act, a2) if view == 1 else (a1, flip_act)
+                sim_states = simulator.next_action_some(st, actions)
+                sim_reward = sim_states[-1].reward()
+                if sim_reward > reward:     # fix operation succeed
+                    # use the simulation results (due to its head node)
+                    arg[self.step - t] += 1
+                    flag = True
+                    ret.append(sim_states)
+
+        if flag:
+            arg[-1] += 1
         return ret
