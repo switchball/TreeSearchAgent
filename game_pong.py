@@ -31,7 +31,7 @@ class PongState(State):
         h_idx = int((ball_y + 0.05) * 10)  # [0 - 10] (-0.05 0.05 0.15 ... 0.95 1.05)
         b_idx = int((ball_x + 0.05) * 10)  # [0 - 10] (-0.05 0.05 0.15 ... 0.95 1.05)
         p_idx = int(p1_y * 5)  # [0 - 4] (0 0.2 0.4 0.6 0.8 1)
-        u_idx = 1 if v_x > 0 else 0
+        u_idx = 1 if v_x > 0 else -1
         v_idx = min(int(abs(v_y) * 100), 5) # [0 - 5]
         arr = [0] * (11 + 11 + 5 + 2 + 6)
         arr[h_idx] = 1
@@ -102,8 +102,9 @@ class PongState(State):
             if nn is None:
                 s += '(%+.2f)' % d
             else:
-                nv = nn.predict_one(self.feature_func())
-                s += '(%+.2f|%+.2f)' % (d, nv)
+                nv1 = self.score_by(nn, view=1)
+                nv2 = self.score_by(nn, view=2)
+                s += '(%+.2f|%+.2f|%+.2f)' % (d, nv1, nv2)
         return s
 
 
@@ -135,6 +136,39 @@ class FollowBallPolicy(Policy):
         else:
             return PongAction(0)
 
+
+class AccuratePongPolicy(Policy):
+    def __init__(self):
+        super(AccuratePongPolicy, self).__init__(PongAction)
+
+    def action(self, state: State, player=1):
+        by = state.s['ball_y']
+        py = state.s['p1_y'] if player == 1 else state.s['p2_y']
+        bx = state.s['ball_x'] if player == 1 else 1 - state.s['ball_x']
+        vx = state.s['v_x'] if player == 1 else -state.s['v_x']
+        vy = state.s['v_y']
+        if vx > 0 or bx > 0.4:
+            if by > py + 0.01:
+                return PongAction(1)
+            elif by < py - 0.01:
+                return PongAction(-1)
+            else:
+                return PongAction(0)
+
+        t = int(bx / abs(vx))
+        dy = vy*t + by
+        # print('bx=%.4f vx=%.4f t=%d vy=%.4f dy=%.4f' % (bx, vx, t, vy, dy))
+        while dy > 1 or dy < 0:
+            if dy < 0:
+                dy = -dy
+            elif dy > 1:
+                dy = 2 - dy
+            else:
+                break
+        if py > dy:
+            return PongAction(-1)
+        else:
+            return PongAction(1)
 
 class PongSimulator(BaseSimulator):
     """PongSimulator: Simulator of Pong Game"""
@@ -297,23 +331,23 @@ class PongSimulator(BaseSimulator):
             canvas.blit(label3, (70, 70))
             label4 = font1.render("Sim: %+.2f" % sim_score, 1, SCORE_COLOR)
             canvas.blit(label4, (70, 120))
-            label5 = font1.render("s_v: %+.4f" % state_score, 1, SCORE_COLOR)
+            label5 = font1.render("s_r: %+.2f" % state_score, 1, SCORE_COLOR)
             canvas.blit(label5, (70, 170))
             label6 = font1.render("fps: %d" % self.GAME_FPS, 1, SCORE_COLOR)
             canvas.blit(label6, (70, 220))
 
             pygame.draw.polygon(canvas,(132,32,65),[[WIDTH // 2, 150],
                                                     [WIDTH // 2, 160],
-                                                    [WIDTH // 2 + int(nn_score*50), 160],
-                                                    [WIDTH // 2 + int(nn_score*50), 150]], 0)
+                                                    [WIDTH // 2 + int(nn_score*100), 160],
+                                                    [WIDTH // 2 + int(nn_score*100), 150]], 0)
             pygame.draw.polygon(canvas,(32,132,65),[[WIDTH // 2, 190],
                                                     [WIDTH // 2, 200],
-                                                    [WIDTH // 2 + int(sim_score*50), 200],
-                                                    [WIDTH // 2 + int(sim_score*50), 190]], 0)
+                                                    [WIDTH // 2 + int(sim_score*100), 200],
+                                                    [WIDTH // 2 + int(sim_score*100), 190]], 0)
             pygame.draw.polygon(canvas,(32,32,165),[[WIDTH // 2, 230],
                                                     [WIDTH // 2, 240],
-                                                    [WIDTH // 2 + int(sim_score * 500), 240],
-                                                    [WIDTH // 2 + int(sim_score * 500), 230]], 0)
+                                                    [WIDTH // 2 + int(state_score * 200), 240],
+                                                    [WIDTH // 2 + int(state_score * 200), 230]], 0)
 
         for event in pygame.event.get():
             if event.type == pygame.KEYDOWN:
@@ -343,12 +377,11 @@ class Helper(object):
     def analysis_state(self, state):
         gamma = self.gamma
         # player1's view
-        f1 = state.feature_func(view=1)
-        nn1 = self.nn.predict_one(f1)
+        nn1 = state.score_by(self.nn, view=1)
 
         sim_trace = self.simulator.next_empty_some(state)
         dis1 = [pow(gamma, k) * s.feature_func(view=1)
-                * (1.0 / (1 - gamma) if k == len(sim_trace) - 1 else 1)
+                * (1.0 / (1 - gamma) if k == len(sim_trace) - 1 and s.stableQ() else 1)
                 for k, s in enumerate(sim_trace)]
         mu = sum(dis1)
         r = np.dot(mu, self.w)
@@ -356,13 +389,35 @@ class Helper(object):
 
         return nn1, r, sr
 
-
-if __name__ == '__main__':
+def example():
     from coupling import Workflow
     simulator = PongSimulator()
-    wf = Workflow(simulator, PongState, PongAction, test_policy=FollowBallPolicy(), gamma=0.99)
-    if True:
-        wf.command('(define traces1 (repeat 1000 random_policy random_policy))')
+    wf = Workflow(simulator, PongState, PongAction, test_policy=AccuratePongPolicy(), gamma=0.9)
+    wf.NN.load(name='model_pong.h5')  # load pre trained model
+
+    # calculate w for state value estimation for visual use
+    wf.command('(define policy_v01 tree_search_policy)')
+    wf.command('(define traces2 (repeat 200 policy_v01 test_policy))')
+    w = wf._train_feature_weight_with_traces(wf.command('traces2'))
+    print(w)
+
+    # show gui window, Key C -> FPS++, Key Z -> FPS--
+    print('Hint: Press C to accelerate, Press Z to decelerate')
+    wf.game_simulator.use_gui(True)
+    wf.game_simulator.helper = Helper(wf.game_simulator, wf.NN, 0.9, w)
+    wf.command('(define t (repeat 100 policy_v01 test_policy))')
+    exit()
+
+
+if __name__ == '__main__':
+    example()
+    exit()
+
+    from coupling import Workflow
+    simulator = PongSimulator()
+    wf = Workflow(simulator, PongState, PongAction, test_policy=AccuratePongPolicy(), gamma=0.9)
+    if False:
+        wf.command('(define traces1 (repeat 200 test_policy random_policy))')
         wf.command('(train! traces1)')  # train! is not pure
         wf.command('(get_weight)')
         wf.command('(save_model!)')
@@ -374,14 +429,21 @@ if __name__ == '__main__':
     wf.command('(define traces2 (repeat 200 policy_v01 test_policy))')
 
     w = wf._train_feature_weight_with_traces(wf.command('traces2'))
+    wf.command('(get_weight)')
 
+    wf.game_simulator.use_gui(True)
+    wf.game_simulator.helper = Helper(wf.game_simulator, wf.NN, 0.9, w)
+    wf.command('(define t (repeat 100 policy_v01 test_policy))')
     exit()
 
     info = []
-    for x in range(2, 6):
+    for x in range(2, 200):
         wf.command('(train! traces%s)' % x)
+        w_old = w
+        w = wf.command('(get_weight)')
+        print('w_diff:', norm(w_old-w))
         wf.command('(define policy_v0%s tree_search_policy)' % x)
-        wf.command('(define traces%s (repeat 200 (explore policy_v0%s 0.1) test_policy))'
+        wf.command('(define traces%s (repeat 100 (explore policy_v0%s 0.05) test_policy))'
                    % (x+1,x))
         ts = wf.command('traces%s'%x)  # type: List[Trace]
         total, win, tie, lose = 0, 0, 0, 0
@@ -398,6 +460,6 @@ if __name__ == '__main__':
     [print(i) for i in info]
 
     wf.game_simulator.use_gui(True)
-    wf.game_simulator.helper = Helper(wf.game_simulator, wf.NN, 0.99, w)
+    wf.game_simulator.helper = Helper(wf.game_simulator, wf.NN, 0.9, w)
     wf.command('(define t (repeat 100 policy_v01 test_policy))')
 

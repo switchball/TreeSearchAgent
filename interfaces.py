@@ -7,6 +7,7 @@ import keras
 from keras.models import Sequential
 from keras.layers import Dense
 from sklearn.svm import LinearSVC
+from scipy.linalg import norm
 import numpy as np
 import random
 from itertools import repeat, chain
@@ -237,6 +238,8 @@ class IRL(object):
         self.gamma = gamma
         self.zero_action = zero_action
         self.bs = simulator
+        self.X = []
+        self.y = []
 
     def feed(self, traces):
         # Prepare Data
@@ -250,17 +253,23 @@ class IRL(object):
         # class 0 means good (x-1), class 1 means bad (x+1)
         rs = list(chain(repeat(0, size // 2), repeat(1, size - size // 2)))
         random.shuffle(rs)
-        self.X = [d * (2*r-1) for d, r in zip(self.data, rs)]
-        self.y = rs
+        self.X += [d * (2*r-1) for d, r in zip(self.data, rs)]
+        self.y += rs
+        # limit recent 50000 samples
+        self.X = self.X[-50000:]
+        self.y = self.y[-50000:]
+        print('feed data %d - [interfaces.py - Line 258]' % len(self.X))
         return self.X, self.y
 
-    def train_w(self, hyper_param_c=1.0):
+    def train_w(self, hyper_param_c=1.0, normalized_norm=1.0):
         # Train with linear svm (with no bias)
         model = LinearSVC(random_state=0, fit_intercept=False)
         model.C = hyper_param_c
         model.fit(self.X, self.y)
 
         self.coef = np.ravel(model.coef_)
+        print('w norm: %.4f - [interfaces.py - Line 268]' % norm(self.coef))
+        self.coef /= norm(self.coef) / normalized_norm
         return self.coef
 
     def _split_advantage(self, trace) -> List[np.ndarray]:
@@ -278,32 +287,35 @@ class IRL(object):
                 mu_good = sum(good_dis_fea)
                 mu_weak = sum(weak_dis_fea)
                 ret.append(mu_good - mu_weak)
-            # the final state is important
-            # final_reward = lt.final_state().reward()
-            # if final_reward > 0:  # it should be better than any given state
-            #     st = lt.states[random.choice(range(lt.step))]
+                # same flow with view=3-winner
+                weak_dis_fea = [pow(self.gamma, k) * s.feature_func(view=3-winner)
+                                * (1.0 / (1 - self.gamma) if k == len(good_trace) - 1 and s.stableQ() else 1)
+                                for k, s in enumerate(good_trace)]
+                good_dis_fea = [pow(self.gamma, k) * s.feature_func(view=3-winner)
+                                * (1.0 / (1 - self.gamma) if k == len(weak_trace) - 1 and s.stableQ() else 1)
+                                for k, s in enumerate(weak_trace)]
+                mu_good = sum(good_dis_fea)
+                mu_weak = sum(weak_dis_fea)
+                ret.append(mu_good - mu_weak)
 
         return ret
 
-    def process_trace_to_vector(self, trace: List[State], winner: int) -> List[Tuple[State, np.ndarray, float]]:
-        ret = []
-        gamma = self.gamma
-        dis_features = [pow(gamma, k) * s.feature_func(view=winner)
-                        * (1.0 / (1 - gamma) if k == len(trace) - 1 and s.stableQ() else 1)
-                        for k, s in enumerate(trace)]
-        mu = sum(dis_features)
-        r = np.dot(mu, self.coef)
-        dis_feature2 = [pow(gamma, k) * s.feature_func(view=3-winner)
-                        * (1.0 / (1 - gamma) if k == len(trace) - 1 and s.stableQ() else 1)
-                        for k, s in enumerate(trace)]
-        r2 = np.dot(sum(dis_feature2), self.coef)
-        ret.append((trace[0], trace[0].feature_func(view=winner), r))
-        ret.append((trace[0], trace[0].feature_func(view=3-winner), r2))
-        return ret
+    def process_trace_to_vector(self, trace: List[State], player: int, ret) -> List[Tuple[State, np.ndarray, float]]:
+        # for player #
+        features = [s.feature_func(view=player) for s in trace]
+        features[-1] *= 1.0 / (1 - self.gamma) if trace[-1].stableQ() else 1
+        r = 0
+        for st, fea in zip(reversed(trace), reversed(features)):
+            r = np.dot(fea, self.coef) + self.gamma * r
+            ret.append((st, fea, r))
 
     def _split_branch(self, trace, w) -> List[Tuple[State, np.ndarray, float]]:
         """
         To collect training data for NN.
+        Only the true trace is collected using recursive way.
+        Specifically,
+            a score (i.e. reward) is related to each state.
+        Previous methods:
         The original idea is to collect all the branching point,
         where the state diverges to two directions which have different results.
         Specifically,
@@ -317,32 +329,29 @@ class IRL(object):
         Also, the terminal state is VERY important.
             So each ending state of trace branch is used.
         """
-
         ret = []
-        if not isinstance(trace, LoosedTrace):
-            lt = LoosedTrace(trace, self.bs)
-        else:
-            lt = trace
-        #actual_trace = lt.states
-        #reward = lt.final_state().reward()
-        #winner = 1 if reward > 0 else 2 if reward < 0 else 0
+        actual_trace = trace.states
+        # for player 1
+        self.process_trace_to_vector(actual_trace, 1, ret)
+        self.process_trace_to_vector(actual_trace, 2, ret)
+
+        if ret is not None:
+            return ret
+
         #if winner > 0 and (actual_trace[-1].terminateQ() or actual_trace[-1].stableQ()):
         #    length = len(actual_trace)
         #    for m in range(1, length - 1):
         #        process(self.gamma, actual_trace[m:], winner, ret)
+        if not isinstance(trace, LoosedTrace):
+            lt = LoosedTrace(trace, self.bs)
+        else:
+            lt = trace
         for winner in (1, 2):  # enumerate the winner in player1 and player2
             split_trace_arr = lt.split(view=winner)
             for good_trace, weak_trace in split_trace_arr:
                 ret += self.process_trace_to_vector(good_trace, winner)
                 ret += self.process_trace_to_vector(weak_trace, winner)
-                #if good_trace[-1].terminateQ() or good_trace[-1].stableQ():
-                #    length = len(good_trace)
-                #    for m in range(1, length - 1):
-                #        process(self.gamma, good_trace[m:], winner, ret)
-                #if weak_trace[-1].terminateQ() or weak_trace[-1].stableQ():
-                #    length = len(weak_trace)
-                #    for m in range(1, length - 1):
-                #        process(self.gamma, weak_trace[m:], winner, ret)
+
         # process terminal state of each side chain
         for chain in random.sample(lt.side_chain, k=1):
             winner = 1 if chain[-1].reward() > 0 \
@@ -376,7 +385,7 @@ class NN(object):
         for n in hs[1:]:
             model.add(Dense(n, activation='relu'))  # hidden layers
         model.add(Dense(self.output_dim))  # output value with no activation
-        adam = keras.optimizers.Adam(lr=5e-4)
+        adam = keras.optimizers.Adam(lr=2e-4)
         model.compile(loss='mean_squared_error', optimizer=adam)
         return model
 
@@ -569,9 +578,9 @@ class LoosedTrace(Trace):
                 picked_act = a2
             picked_act_idx = [k for k, a in enumerate(action_space) if a == picked_act][0]
             scores = np.ravel(nn.predict(np.array([s.feature_func(view) for s in next_states])))
-            if np.max(scores) != scores[picked_act_idx]:
-                print('Mismatch! scores=%s, act_idx=%d' % (scores, picked_act_idx))
-                print('State:', st, 'with', st.s)
+            #if np.max(scores) != scores[picked_act_idx]:
+            #    print('Mismatch! scores=%s, act_idx=%d' % (scores, picked_act_idx))
+            #    print('State:', st, 'with', st.s)
             # enumerate flip actions
             for flip_act in action_space:
                 if flip_act == picked_act:

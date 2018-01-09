@@ -58,12 +58,12 @@ class MinimaxSearch(Policy):
         """
         In the implementation, the agent will use minimax search on given depth
         """
-        value = self.NN.predict_one(state.feature_func(view=player))
-        if value >= 0:
+        value = state.score_by(self.NN, view=player)
+        if value >= -20:
             v, idx = self.minimax(state, 1*2, True, player)
-        elif value >= -1:
+        elif value >= -50:
             v, idx = self.minimax(state, 2*2, True, player)
-        elif value >= -2:
+        elif value >= -200:
             v, idx = self.minimax(state, 3*2, True, player)
         else:
             v, idx = self.minimax(state, 4*2, True, player)

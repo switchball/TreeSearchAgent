@@ -33,8 +33,8 @@ class Workflow(object):
         self.IRL = IRL(simulator, self.zero_action, gamma=gamma)
         input_dim = len(self.initial_state.feature_func())
         hidden_units = [64, 128, 128]
-        batch_size = 16
-        epochs = 4
+        batch_size = 128
+        epochs = 1
         self.NN = NN(input_dim, hidden_units, batch_size, epochs)
 
         # scheme env
@@ -109,11 +109,12 @@ class Workflow(object):
         # hint: LoosedTrace(traces[2], wf.simulator).show(wf.IRL.coef, wf.NN)
 
     def _repeat_game_with_policy(self, n, policy1, policy2):
-        self.game = Game(policy1, policy2, max_step=1000)
+        self.game = Game(policy1, policy2, max_step=300)
         self.game_simulator.reset_cnt()
         total, win, tie, lose = 0, 0, 0, 0
         traces = []
         lose_idx = []
+        avg_turns = []
         ts = time.time()
         for e in range(n):
             self.game.reset()
@@ -123,13 +124,16 @@ class Workflow(object):
             win += 1 if reward > 0 else 0
             tie += 1 if reward == 0 else 0
             lose += 1 if reward < 0 else 0
+            avg_turns.append(trace.step)
             if 'update_score' in dir(self.game_simulator):
                 self.game_simulator.update_score(win,tie,lose)
             if reward < 0:
                 lose_idx.append(e)
             traces.append(trace)
             if n >= 5 and e % (n//5) == (n//5-1):
-                print("[%-10s] %d%% - W/T/L: %d/%d/%d" % ('=' * (10 * (e + 1) // n), (100 * (e + 1) // n), win, tie, lose))
+                turns = np.mean(avg_turns)
+                avg_turns = []
+                print("[%-10s] %d%% - W/T/L: %d/%d/%d - Avg Turns: %.1f" % ('=' * (10 * (e + 1) // n), (100 * (e + 1) // n), win, tie, lose, turns))
 
         print()
         t = time.time() - ts
@@ -143,7 +147,7 @@ class Workflow(object):
     def _train_feature_weight_with_traces(self, traces):
         self.IRL.feed(traces) # the weight of each trace is same here
         # Maybe you can use cross validation to choose hyper param c
-        param = self.IRL.train_w(hyper_param_c=1.0)
+        param = self.IRL.train_w(hyper_param_c=1e-1)
         return param
 
     def _train_nn(self, traces, weight):
@@ -156,13 +160,16 @@ class Workflow(object):
             cnt = Counter()
             traces_s = [trace.fix_auto(self.simulator, self.NN, target=1, arg=cnt) for trace in lt_traces]
             fixed_traces = [item for sublist in traces_s for item in sublist]  # type: List[List[State]] # flatten array
-            dd2 = [self.IRL.process_trace_to_vector(trace, winner=1) for trace in fixed_traces]
-            print('Find %d fixed traces [in coupling.py - Line 158]' % len(fixed_traces))
+            dd2 = []
+            for trace in fixed_traces:
+                self.IRL.process_trace_to_vector(trace, player=1, ret=dd2)
+            print('Find %d fixed traces %s data [in coupling.py - Line 158]' % (len(fixed_traces), len(dd2)))
             print(cnt.most_common())
         else:
             dd2 = []
-        dd = [item for sublist in (dd1 + dd2) for item in sublist]  # type: List[Tuple[State, np.ndarray, float]]
-        data = [(sf, r) for s, sf, r in dd]                         # type: List[Tuple[np.ndarray, float]]
+        dd = [item for sublist in dd1 for item in sublist]  # type: List[Tuple[State, np.ndarray, float]]
+        dd = dd + dd2
+        data = [(sf, r) for s, sf, r in dd]         # type: List[Tuple[np.ndarray, float]]
         size = len(data)
         print('Total %d training data [in coupling.py - Line 164]' % size)
 
@@ -170,15 +177,23 @@ class Workflow(object):
         X = np.array(X)
         y = np.array(y).transpose()
 
-        self.NN.model = self.NN.build()
+        self.NN.build()
         self.NN.train(X, y)
 
         y_pred = np.ravel(self.NN.predict(X))
         self.y = y
         self.y_pred = y_pred
 
+        # sample data
+        indexes = random.sample(range(size), k=30)
+        indexes.sort(key=lambda x: y[x])
+        for ind in indexes:
+            st = dd[ind][0]
+            print('%s label: %+.4f pred: %+.4f diff: %.2f' % (st, y[ind], y_pred[ind], abs(y[ind]-y_pred[ind])))
+        print('END of data sample')
+
         # Calculate the point density
-        xy = np.vstack([y, y_pred])
+        xy = np.vstack([y[:10000], y_pred[:10000]])
         z0 = gaussian_kde(xy)(xy)
 
         # Sort the points by density, so that the densest points are plotted last
@@ -189,6 +204,8 @@ class Workflow(object):
         ax.scatter(x0, y0, c=z0, s=50, edgecolor='')
         plt.axis('equal')
         plt.show()
+
+
 
     def _draw(self, trace, weight):
         """ Input trace, use NN to predict result"""
